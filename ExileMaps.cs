@@ -379,7 +379,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Delirium");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Expedition");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Ritual");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Boss");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Map Boss");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corruption");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Irradiated");
             DrawConnections(cachedNode, nodeCurrentPosition);
