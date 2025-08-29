@@ -126,7 +126,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             job.Start();
             
         }
-        
+        if (!refreshingCache)
+        {
+            UpdateWaypointPaths();
+        }
+
         return;
     }
 
@@ -379,6 +383,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Delirium");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Expedition");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Ritual");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Abyss");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Map Boss");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Cleansed");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted");
@@ -446,6 +451,48 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     #endregion
 
+    private List<Node> FindShortestPath(Node start, Node end)
+    {
+        if (start == null || end == null)
+            return null;
+
+        var visited = new HashSet<Vector2i>();
+        var queue = new Queue<(Node node, List<Node> path)>();
+
+        queue.Enqueue((start, new List<Node> { start }));
+        visited.Add(start.Coordinates);
+
+        while (queue.Count > 0)
+        {
+            var (current, path) = queue.Dequeue();
+
+            if (current.Coordinates == end.Coordinates)
+                return path;
+
+            foreach (var neighbor in current.Neighbors.Values)
+            {
+                if (neighbor != null && !visited.Contains(neighbor.Coordinates))
+                {
+                    var newPath = new List<Node>(path) { neighbor };
+                    queue.Enqueue((neighbor, newPath));
+                    visited.Add(neighbor.Coordinates);
+                }
+            }
+        }
+
+        return null; // No path found
+    }
+    private Node FindClosestVisitedNode(Node waypointNode)
+    {
+        if (waypointNode == null)
+            return null;
+
+        return mapCache.Values
+            .Where(x => x.IsVisited)
+            .OrderBy(x => Vector2.Distance(waypointNode.MapNode.Element.GetClientRect().Center,
+                                           x.MapNode.Element.GetClientRect().Center))
+            .FirstOrDefault();
+    }
     private Node GetClosestNodeToCursor() {
         var closestNode = AtlasPanel.Descriptions.OrderBy(x => Vector2.Distance(GameController.Game.IngameState.UIHoverElement.GetClientRect().Center, x.Element.GetClientRect().Center)).AsParallel().FirstOrDefault();
 
@@ -464,6 +511,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
 
     #region Map Cache
+
+
     public void RefreshMapCache(bool clearCache = false)
     {
         refreshingCache = true;
@@ -496,11 +545,34 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RecalculateWeights();
         //LogMessage($"Max Map Weight: {maxMapWeight}, Min Map Weight: {minMapWeight}");
 
+        UpdateWaypointPaths();
+
         refreshingCache = false;
         refreshCache = false;
         lastRefresh = DateTime.Now;
     }
-    
+
+    private void DrawWaypointPath(Waypoint waypoint)
+    {
+        if (waypoint.PathFromStart == null || waypoint.PathFromStart.Count <= 1)
+            return;
+
+        for (int i = 0; i < waypoint.PathFromStart.Count - 1; i++)
+        {
+            var currentNode = waypoint.PathFromStart[i];
+            var nextNode = waypoint.PathFromStart[i + 1];
+
+            if (currentNode == null || nextNode == null || !IsOnScreen(currentNode.MapNode.Element.GetClientRect().Center) || !IsOnScreen(nextNode.MapNode.Element.GetClientRect().Center))
+                continue;
+
+            Vector2 start = currentNode.MapNode.Element.GetClientRect().Center;
+            Vector2 end = nextNode.MapNode.Element.GetClientRect().Center;
+
+            // Draw path line with a different color/style to distinguish from regular connections
+            Graphics.DrawLine(start, end, Settings.Graphics.MapLineWidth + 2, Settings.Graphics.PathLineColor);
+        }
+    }
+
     private void RecalculateWeights() {
 
         if (mapCache.Count == 0)
@@ -538,6 +610,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (!newNode.IsVisited) {
             // Check if the map has content
             try {
+                
                 AddNodeContentTypesFromTextures(node, newNode);
 
                 if (node.Element.Content != null)  
@@ -618,7 +691,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return 1;
 
         cachedNode.Content.Clear();
+
         AddNodeContentTypesFromTextures(node, cachedNode);
+
 
         if (node.Element.Content != null)
             foreach(var content in node.Element.Content.Where(x => x.Name != ""))           
@@ -681,27 +756,25 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 cachedNode.Neighbors.TryAdd(point.Item1, neighborNode);
         
     }
-
     private void AddNodeContentTypesFromTextures(AtlasNodeDescription node, Node toNode) {
-        
+
         if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Corrupt")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted", out Content corruption))                        
+            if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted", out Content corruption))
                 toNode.Content.TryAdd(corruption.Name, corruption);
-            
+
         if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("CorruptionNexus")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted Nexus", out Content nexus))                        
+            if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted Nexus", out Content nexus))
                 toNode.Content.TryAdd(nexus.Name, nexus);
-        
+
         if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Sanctification")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("Cleansed", out Content cleansed))                        
+            if (Settings.MapContent.ContentTypes.TryGetValue("Cleansed", out Content cleansed))
                 toNode.Content.TryAdd(cleansed.Name, cleansed);
 
         if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("UniqueMap")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("UniqueMap", out Content uniqueMap))                        
+            if (Settings.MapContent.ContentTypes.TryGetValue("UniqueMap", out Content uniqueMap))
                 toNode.Content.TryAdd(uniqueMap.Name, uniqueMap);
-        
+
     }
-    
     #endregion
 
     #region Drawing Functions
@@ -849,8 +922,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return;  
 
         // get the map weight % relative to the average map weight
-        float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);  
-         
+        float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
+
         float offsetX = Settings.MapTypes.ShowMapNames ? (Graphics.MeasureText(cachedNode.Name.ToUpper()).X / 2) + 30 : 50;
         Vector2 position = new(nodeCurrentPosition.Center.X + offsetX, nodeCurrentPosition.Center.Y);
 
@@ -1149,7 +1222,25 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
 
     #endregion
-    
+    private void UpdateWaypointPaths()
+    {
+        foreach (var waypoint in Settings.Waypoints.Waypoints.Values)
+        {
+            if (mapCache.TryGetValue(waypoint.Coordinates, out Node waypointNode))
+            {
+                // Find the closest visited node to this specific waypoint
+                var startNode = FindClosestVisitedNode(waypointNode);
+                if (startNode == null)
+                    continue;
+
+                waypoint.PathFromStart = FindShortestPath(startNode, waypointNode);
+            }
+            else
+            {
+                waypoint.PathFromStart = null;
+            }
+        }
+    }
     #region Helper Functions
 
     private bool IsOnScreen(Vector2 position)
@@ -1243,10 +1334,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         {
             var flags = ImGuiTableFlags.BordersInnerH;
             ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0, 0, 0, 0));
-            if (ImGui.BeginTable("waypoint_list_table", 8, flags))//, new Vector2(-1, panelSize.Y/3)))
+            if (ImGui.BeginTable("waypoint_list_table", 9, flags))//, new Vector2(-1, panelSize.Y/3)))
             {
                 ImGui.TableSetupColumn("Enable", ImGuiTableColumnFlags.WidthFixed, 30);                                                               
-                ImGui.TableSetupColumn("Waypoint Name", ImGuiTableColumnFlags.WidthFixed, 300);     
+                ImGui.TableSetupColumn("Waypoint Name", ImGuiTableColumnFlags.WidthFixed, 300);
+                ImGui.TableSetupColumn("Steps", ImGuiTableColumnFlags.WidthFixed, 50);
                 ImGui.TableSetupColumn("X", ImGuiTableColumnFlags.WidthFixed, 40);                    
                 ImGui.TableSetupColumn("Y", ImGuiTableColumnFlags.WidthFixed, 40);     
                 ImGui.TableSetupColumn("Color", ImGuiTableColumnFlags.WidthFixed, 30);     
@@ -1276,6 +1368,25 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     if (ImGui.InputText($"##{id}_name", ref _name, 32)) {
                         waypoint.Name = _name;
                     }
+
+                    // steps
+                    ImGui.TableNextColumn();
+                    int steps = waypoint.PathFromStart?.Count > 0 ? waypoint.PathFromStart.Count - 1 : -1;
+                    if (steps >= 0)
+                    {
+                        // Optionally color-code based on distance
+                        Color stepsColor = steps <= 3 ? Color.Green : (steps <= 7 ? Color.Yellow : Color.Red);
+                        Vector4 stepsColorVector = new Vector4(stepsColor.R / 255.0f, stepsColor.G / 255.0f, stepsColor.B / 255.0f, stepsColor.A / 255.0f);
+                        ImGui.PushStyleColor(ImGuiCol.Text, stepsColorVector);
+                        ImGui.Text(steps.ToString());
+                        ImGui.PopStyleColor();
+                    }
+                    else
+                    {
+                        ImGui.Text("-");
+                    }
+
+
                     // Coordinates
                     ImGui.TableNextColumn();                    
                     ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - 40.0f) / 2.0f);
@@ -1408,7 +1519,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             {                                                            
                 ImGui.TableSetupColumn("Map Name", ImGuiTableColumnFlags.WidthFixed, 200);   
                 ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthFixed, 60);     
-                ImGui.TableSetupColumn("Modifiers", ImGuiTableColumnFlags.WidthFixed, 100); 
+                ImGui.TableSetupColumn("Modifiers", ImGuiTableColumnFlags.WidthFixed, 100);
+                ImGui.TableSetupColumn("Steps", ImGuiTableColumnFlags.WidthFixed, 50);
                 ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 80);
                 ImGui.TableSetupColumn("Unlocked", ImGuiTableColumnFlags.WidthFixed, 28);
                 ImGui.TableSetupColumn("Way", ImGuiTableColumnFlags.WidthFixed, 32);
@@ -1451,7 +1563,36 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         }
                         // reset font size
                         ImGui.SetWindowFontScale(1.0f);
+                        // Steps
+                        ImGui.TableNextColumn();
+                        string stepsText = "-";
 
+                        // Instead of checking node.IsWaypoint, check if the node exists in the waypoints dictionary
+                        string waypointKey = node.Coordinates.ToString();
+                        if (Settings.Waypoints.Waypoints.TryGetValue(waypointKey, out Waypoint waypoint))
+                        {
+                            // We found a waypoint for this node
+                            if (waypoint.PathFromStart != null && waypoint.PathFromStart.Count > 0)
+                            {
+                                int steps = waypoint.PathFromStart.Count - 1;
+                                stepsText = steps.ToString();
+
+                                // Optionally color-code based on distance
+                                Color stepsColor = steps <= 3 ? Color.Green : (steps <= 7 ? Color.Yellow : Color.Red);
+                                Vector4 stepsColorVector = new Vector4(stepsColor.R / 255.0f, stepsColor.G / 255.0f, stepsColor.B / 255.0f, stepsColor.A / 255.0f);
+                                ImGui.PushStyleColor(ImGuiCol.Text, stepsColorVector);
+                                ImGui.TextUnformatted(stepsText);
+                                ImGui.PopStyleColor();
+                            }
+                            else
+                            {
+                                ImGui.TextUnformatted(stepsText);
+                            }
+                        }
+                        else
+                        {
+                            ImGui.TextUnformatted(stepsText);
+                        }
                         // Weight
                         ImGui.TableNextColumn();
                         // set color
@@ -1461,6 +1602,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         ImGui.PushStyleColor(ImGuiCol.Text, _colorVector);
                         ImGui.TextUnformatted(node.Weight.ToString("0.0"));
                         ImGui.PopStyleColor();
+
+                        
 
                         // Unlocked
                         ImGui.TableNextColumn();
@@ -1513,9 +1656,17 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         iconPosition -= new Vector2(0, 20);
         Vector2 waypointTextPosition = iconPosition - new Vector2(0, 10);
-        
-        DrawCenteredTextWithBackground(waypoint.Name, waypointTextPosition, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);
-        
+        // Add step count to waypoint label if available
+        string displayText = waypoint.StepCount >= 0
+            ? $"{waypoint.Name} ({waypoint.StepCount} steps)"
+            : waypoint.Name;
+
+        DrawCenteredTextWithBackground(displayText, waypointTextPosition, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);
+
+        // Draw the path if enabled
+        if (Settings.Graphics.ShowPaths)
+            DrawWaypointPath(waypoint);
+
         iconPosition -= new Vector2(waypointSize.X / 2, 0);
         RectangleF iconSize = new RectangleF(iconPosition.X, iconPosition.Y, waypointSize.X, waypointSize.Y);
         Graphics.DrawImage(IconsFile, iconSize, SpriteHelper.GetUV(waypoint.Icon), waypoint.Color);
@@ -1533,6 +1684,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         newWaypoint.Color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight);
 
         Settings.Waypoints.Waypoints.Add(cachedNode.Coordinates.ToString(), newWaypoint);
+        UpdateWaypointPaths();
     }
 
     private void RemoveWaypoint(Node cachedNode) {
@@ -1540,9 +1692,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return;
 
         Settings.Waypoints.Waypoints.Remove(cachedNode.Coordinates.ToString());
+        UpdateWaypointPaths();
     }
     private void RemoveWaypoint(Waypoint waypoint) {
         Settings.Waypoints.Waypoints.Remove(waypoint.Coordinates.ToString());
+        UpdateWaypointPaths();
     }
 
     private void DrawWaypointArrow(Waypoint waypoint) {
