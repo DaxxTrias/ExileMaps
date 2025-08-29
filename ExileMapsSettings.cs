@@ -154,6 +154,11 @@ public class GraphicSettings
     
     [Menu("Node Radius", "Radius of the circles used to highlight map nodes")]
     public RangeNode<float> NodeRadius { get; set; } = new RangeNode<float>(1.5f, 0, 10);
+    [Menu("Draw paths to waypoints", "Shows the shortest path from the nearest visited node to waypoints")]
+    public ToggleNode ShowPaths { get; set; } = new ToggleNode(true);
+
+    [Menu("Waypoint path color", "Color of the path lines to waypoints")]
+    public ColorNode PathLineColor { get; set; } = new ColorNode(Color.FromArgb(255, 255, 140, 0));
 }
 
 [Submenu(CollapsedByDefault = true)]
@@ -776,7 +781,7 @@ public class WaypointSettings
     public string WaypointPanelSortBy { get; set; } = "Weight";
     public bool WaypointsUseRegex { get; set; } = false;
     public bool ShowUnlockedOnly { get; set; } = false;
-
+    
     public string WaypointPanelFilter { get; set; } = "";
     public ObservableDictionary<string, Waypoint> Waypoints { get; set; } = [];
     public WaypointSettings() {    

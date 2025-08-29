@@ -113,7 +113,7 @@
   },
   "Bastille": {
     "Name": "Bastille",
-    "IDs": [      
+    "IDs": [
       "MapBastille",
       "MapBastille_NoBoss"
     ],
