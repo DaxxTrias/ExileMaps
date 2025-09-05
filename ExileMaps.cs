@@ -7,6 +7,7 @@ using System.Linq;
 using System.Numerics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 using ExileCore2;
 using ExileCore2.PoEMemory.Elements.AtlasElements;
@@ -69,6 +70,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     public override bool Initialise()
     {
         Main = this;        
+        
+        TaskScheduler.UnobservedTaskException += (sender, e) =>
+        {
+            LogError("UnobservedTaskException: " + e.Exception + "\n" + e.Exception?.StackTrace);
+            e.SetObserved();
+        };
+        
         RegisterHotkeys();
         SubscribeToEvents();
 
@@ -592,10 +600,21 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private void RecalculateWeights() {
 
-        if (mapCache.Count == 0)
-            return;
+        List<float> mapNodes;
 
-        var mapNodes = mapCache.Values.Where(x => !x.IsVisited).Select(x => x.Weight).ToList();
+        lock (mapCacheLock)
+        {
+            if (mapCache.Count == 0)
+            {
+                averageMapWeight = 0f;
+                maxMapWeight = 1f;
+                minMapWeight = 0f;
+                return;
+            }
+
+            mapNodes = mapCache.Values.Where(x => !x.IsVisited).Select(x => x.Weight).ToList();
+        }
+
         if (mapNodes.Count == 0)
         {
             averageMapWeight = 0f;
