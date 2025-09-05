@@ -21,6 +21,10 @@ namespace ExileMaps.Classes
         public bool Line { get; set; }
         public bool Arrow { get; set; }
         public float Scale { get; set; } = 1;
+        [JsonIgnore]
+        public List<Node> PathFromStart { get; set; } = new List<Node>();
+        [JsonIgnore]
+        public int StepCount => PathFromStart?.Count > 0 ? PathFromStart.Count - 1 : -1;
 
         [JsonConverter(typeof(Vector2iConverter))]
         public Vector2i Coordinates;
@@ -41,6 +45,8 @@ namespace ExileMaps.Classes
             if (Main.AtlasPanel == null) return null;
             return Main.AtlasPanel.Descriptions.FirstOrDefault(x => x.Coordinate.ToString() == Coordinates.ToString()) ?? null;
         }
+
+
     
     }
 }
