@@ -120,8 +120,15 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         {
             var job = new Job($"{nameof(ExileMaps)}RefreshCache", () =>
             {
-                RefreshMapCache();
-                refreshCache = false;
+                try
+                {
+                    RefreshMapCache();
+                    refreshCache = false;
+                }
+                catch (Exception ex)
+                {
+                    LogError("Error during RefreshMapCache: " + ex.Message + "\n" + ex.StackTrace);
+                }
             });
             job.Start();
             
@@ -496,6 +503,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private Node GetClosestNodeToCursor() {
         var closestNode = AtlasPanel.Descriptions.OrderBy(x => Vector2.Distance(GameController.Game.IngameState.UIHoverElement.GetClientRect().Center, x.Element.GetClientRect().Center)).AsParallel().FirstOrDefault();
 
+        if (closestNode == null)
+            return null;
+
         if (mapCache.TryGetValue(closestNode.Coordinate, out Node cachedNode))
             return cachedNode;
         else
@@ -504,6 +514,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private Node GetClosestNodeToCenterScreen() {
         var closestNode = AtlasPanel.Descriptions.OrderBy(x => Vector2.Distance(screenCenter, x.Element.GetClientRect().Center)).AsParallel().FirstOrDefault();
+        if (closestNode == null)
+            return null;
         if (mapCache.TryGetValue(closestNode.Coordinate, out Node cachedNode))
             return cachedNode;
         else 
@@ -521,35 +533,40 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             lock (mapCacheLock)            
                 mapCache.Clear();
 
-        List<AtlasNodeDescription> atlasNodes = [.. AtlasPanel.Descriptions];
+        try
+        {
+            List<AtlasNodeDescription> atlasNodes = [.. AtlasPanel.Descriptions];
 
-        // Start timer
-        var timer = new Stopwatch();
-        timer.Start();
-        long count = 0;
-        foreach (var node in atlasNodes) {
-            if (mapCache.TryGetValue(node.Coordinate, out Node cachedNode))
-                count += RefreshCachedMapNode(node, cachedNode);
-            else
-                count += CacheNewMapNode(node);
+            // Start timer
+            var timer = new Stopwatch();
+            timer.Start();
+            long count = 0;
+            foreach (var node in atlasNodes) {
+                if (mapCache.TryGetValue(node.Coordinate, out Node cachedNode))
+                    count += RefreshCachedMapNode(node, cachedNode);
+                else
+                    count += CacheNewMapNode(node);
 
-            CacheMapConnections(mapCache[node.Coordinate]);
+                CacheMapConnections(mapCache[node.Coordinate]);
 
+            }
+            // stop timer
+            timer.Stop();
+            long time = timer.ElapsedMilliseconds;
+            float average = (float)time / count;
+            //LogMessage($"Map cache refreshed in {time}ms, {count} nodes processed, average time per node: {average:0.00}ms");
+
+            RecalculateWeights();
+            //LogMessage($"Max Map Weight: {maxMapWeight}, Min Map Weight: {minMapWeight}");
+
+            UpdateWaypointPaths();
         }
-        // stop timer
-        timer.Stop();
-        long time = timer.ElapsedMilliseconds;
-        float average = (float)time / count;
-        //LogMessage($"Map cache refreshed in {time}ms, {count} nodes processed, average time per node: {average:0.00}ms");
-
-        RecalculateWeights();
-        //LogMessage($"Max Map Weight: {maxMapWeight}, Min Map Weight: {minMapWeight}");
-
-        UpdateWaypointPaths();
-
-        refreshingCache = false;
-        refreshCache = false;
-        lastRefresh = DateTime.Now;
+        finally
+        {
+            refreshingCache = false;
+            refreshCache = false;
+            lastRefresh = DateTime.Now;
+        }
     }
 
     private void DrawWaypointPath(Waypoint waypoint)
@@ -578,13 +595,32 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (mapCache.Count == 0)
             return;
 
-        var mapNodes = mapCache.Values.Where(x => !x.IsVisited).Select(x => x.Weight).Distinct().ToList();
-        // Get the weighted average value of the map nodes
-        averageMapWeight = mapNodes.Count > 0 ? mapNodes.Average() : 0;
-        // Get the standard deviation of the map nodes
-        // Get the max and min map weights
-        maxMapWeight = mapNodes.Count > 0 ? mapNodes.OrderByDescending(x => x).Skip(10).Max() : 0;
-        minMapWeight = mapNodes.Count > 0 ? mapNodes.OrderBy(x => x).Skip(5).Min() : 0;
+        var mapNodes = mapCache.Values.Where(x => !x.IsVisited).Select(x => x.Weight).ToList();
+        if (mapNodes.Count == 0)
+        {
+            averageMapWeight = 0f;
+            maxMapWeight = 1f;
+            minMapWeight = 0f;
+            return;
+        }
+
+        averageMapWeight = mapNodes.Average();
+
+        // Robust percentile-based bounds (5th and 95th percentiles) to avoid outliers and empty sequences
+        var sorted = mapNodes.OrderBy(x => x).ToList();
+        int count = sorted.Count;
+        int lowerIndex = Math.Clamp((int)Math.Floor(0.05 * (count - 1)), 0, count - 1);
+        int upperIndex = Math.Clamp((int)Math.Ceiling(0.95 * (count - 1)), 0, count - 1);
+
+        minMapWeight = sorted[lowerIndex];
+        maxMapWeight = sorted[upperIndex];
+
+        // Ensure a non-zero, sane range
+        if (maxMapWeight <= minMapWeight)
+        {
+            // Expand slightly to prevent division by zero downstream
+            maxMapWeight = minMapWeight + 1f;
+        }
     }
 
     private int CacheNewMapNode(AtlasNodeDescription node)
@@ -697,7 +733,16 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         if (node.Element.Content != null)
             foreach(var content in node.Element.Content.Where(x => x.Name != ""))           
-                cachedNode.Content.TryAdd(content.Name, Settings.MapContent.ContentTypes[content.Name]);
+            {
+                if (Settings.MapContent.ContentTypes.TryGetValue(content.Name, out Content known))
+                {
+                    cachedNode.Content.TryAdd(known.Name, known);
+                }
+                else
+                {
+                    // Unknown content type from game data; ignore safely.
+                }
+            }
 
         try {
             cachedNode.Effects.Clear();
@@ -906,8 +951,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return;
             
         var radius = (nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 4 * Settings.Graphics.NodeRadius;
-        var weight = cachedNode.Weight;
-        Color color = Settings.MapTypes.ColorNodesByWeight ? ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, (weight - minMapWeight) / (maxMapWeight - minMapWeight)) : cachedNode.MapType.NodeColor;
+        var fraction = GetNormalizedWeight(cachedNode.Weight);
+        Color color = Settings.MapTypes.ColorNodesByWeight ? ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, fraction) : cachedNode.MapType.NodeColor;
         Graphics.DrawCircleFilled(nodeCurrentPosition.Center, radius, color, 16);
     }
 
@@ -921,13 +966,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             cachedNode.IsVisited || !cachedNode.MapType.Highlight)
             return;  
 
-        // get the map weight % relative to the average map weight
-        float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
+        // Normalized weight in [0,1]
+        float fraction = GetNormalizedWeight(cachedNode.Weight);
 
         float offsetX = Settings.MapTypes.ShowMapNames ? (Graphics.MeasureText(cachedNode.Name.ToUpper()).X / 2) + 30 : 50;
         Vector2 position = new(nodeCurrentPosition.Center.X + offsetX, nodeCurrentPosition.Center.Y);
 
-        DrawCenteredTextWithBackground($"{(int)(weight*100)}%", position, ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight), Settings.Graphics.BackgroundColor, true, 10, 3);
+        DrawCenteredTextWithBackground($"{(int)(fraction*100)}%", position, ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, fraction), Settings.Graphics.BackgroundColor, true, 10, 3);
     }
     /// <summary>
     /// Draws the name of the map on the atlas.
@@ -946,8 +991,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         Color backgroundColor = Settings.MapTypes.UseColorsForMapNames ? cachedNode.MapType.BackgroundColor : Settings.Graphics.BackgroundColor;
         
         if (Settings.MapTypes.UseWeightColorsForMapNames) {
-            float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
-            fontColor = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight);
+            float fraction = GetNormalizedWeight(cachedNode.Weight);
+            fontColor = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, fraction);
         }
 
         DrawCenteredTextWithBackground(cachedNode.Name.ToUpper(), nodeCurrentPosition.Center, fontColor, backgroundColor, true, 10, 3);
@@ -1278,6 +1323,18 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     {
         return Vector2.Distance(screenCenter, cachedNode.MapNode.Element.GetClientRect().Center);
     }
+
+    private float GetNormalizedWeight(float value)
+    {
+        // Normalize to [0,1] using current min/max, guarding against zero/NaN ranges
+        float range = maxMapWeight - minMapWeight;
+        if (range <= 1e-6f)
+            return 0.5f;
+        float t = (value - minMapWeight) / range;
+        if (float.IsNaN(t) || float.IsInfinity(t))
+            return 0.5f;
+        return Math.Clamp(t, 0f, 1f);
+    }
     
     #endregion
     #region Waypoint Panel
@@ -1596,8 +1653,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         // Weight
                         ImGui.TableNextColumn();
                         // set color
-                        float weight = (node.Weight - minMapWeight) / (maxMapWeight - minMapWeight);        
-                        _color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor,Settings.MapTypes.GoodNodeColor, weight);
+                        float fraction = GetNormalizedWeight(node.Weight);        
+                        _color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor,Settings.MapTypes.GoodNodeColor, fraction);
                         _colorVector = new Vector4(_color.R / 255.0f, _color.G / 255.0f, _color.B / 255.0f, _color.A / 255.0f);
                         ImGui.PushStyleColor(ImGuiCol.Text, _colorVector);
                         ImGui.TextUnformatted(node.Weight.ToString("0.0"));
@@ -1678,10 +1735,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (Settings.Waypoints.Waypoints.ContainsKey(cachedNode.Coordinates.ToString()))
             return;
 
-        float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
+        float fraction = GetNormalizedWeight(cachedNode.Weight);
         Waypoint newWaypoint = cachedNode.ToWaypoint();
         newWaypoint.Icon = MapIconsIndex.LootFilterLargeWhiteUpsideDownHouse;
-        newWaypoint.Color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight);
+        newWaypoint.Color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, fraction);
 
         Settings.Waypoints.Waypoints.Add(cachedNode.Coordinates.ToString(), newWaypoint);
         UpdateWaypointPaths();
