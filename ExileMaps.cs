@@ -802,22 +802,40 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     
     private void CacheMapConnections(Node cachedNode) {
         
-        if (cachedNode.Neighbors.Where(x => x.Value.Coordinates != default).Count() == 4)
+        if (cachedNode == null)
             return;
-            
+
+        // Ensure dictionary exists and rebuild deterministically to avoid stale/null entries
+        cachedNode.Neighbors ??= new Dictionary<Vector2i, Node>();
+        cachedNode.Neighbors.Clear();
+
+        // Defensive read of atlas points
         var connectionPoints = AtlasPanel.Points.FirstOrDefault(x => x.Item1 == cachedNode.Coordinates);
+        bool noPoints = connectionPoints.Item1 == default && connectionPoints.Item2 == default && connectionPoints.Item3 == default && connectionPoints.Item4 == default && connectionPoints.Item5 == default;
+        if (noPoints)
+            return;
+
         cachedNode.NeighborCoordinates = (connectionPoints.Item2, connectionPoints.Item3, connectionPoints.Item4, connectionPoints.Item5);
         var neighborCoordinates = new[] { connectionPoints.Item2, connectionPoints.Item3, connectionPoints.Item4, connectionPoints.Item5 };
 
-        foreach (Vector2i vector in neighborCoordinates)
-            if (mapCache.TryGetValue(vector, out Node neighborNode))
-                cachedNode.Neighbors.TryAdd(vector, neighborNode);
-        
-        // Get connections from other nodes to this node
-        var neighborConnections = AtlasPanel.Points.Where(x => x.Item2 == cachedNode.Coordinates || x.Item3 == cachedNode.Coordinates || x.Item4 == cachedNode.Coordinates || x.Item5 == cachedNode.Coordinates).AsParallel().ToList();
-        foreach (var point in neighborConnections)
-            if (mapCache.TryGetValue(point.Item1, out Node neighborNode))
-                cachedNode.Neighbors.TryAdd(point.Item1, neighborNode);
+        // Safely read from mapCache with lock to avoid races while refreshing
+        lock (mapCacheLock) {
+            foreach (Vector2i vector in neighborCoordinates) {
+                if (vector == default || vector.Equals(cachedNode.Coordinates))
+                    continue;
+                if (mapCache.TryGetValue(vector, out Node neighborNode) && neighborNode != null && neighborNode.Coordinates != default)
+                    cachedNode.Neighbors[vector] = neighborNode;
+            }
+
+            // Get connections from other nodes to this node
+            var neighborConnections = AtlasPanel.Points.Where(x => x.Item2 == cachedNode.Coordinates || x.Item3 == cachedNode.Coordinates || x.Item4 == cachedNode.Coordinates || x.Item5 == cachedNode.Coordinates).ToList();
+            foreach (var point in neighborConnections) {
+                if (point.Item1 == default)
+                    continue;
+                if (mapCache.TryGetValue(point.Item1, out Node neighborNode) && neighborNode != null && neighborNode.Coordinates != default)
+                    cachedNode.Neighbors[point.Item1] = neighborNode;
+            }
+        }
         
     }
     private void AddNodeContentTypesFromTextures(AtlasNodeDescription node, Node toNode) {
