@@ -550,12 +550,19 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             timer.Start();
             long count = 0;
             foreach (var node in atlasNodes) {
-                if (mapCache.TryGetValue(node.Coordinate, out Node cachedNode))
-                    count += RefreshCachedMapNode(node, cachedNode);
-                else
-                    count += CacheNewMapNode(node);
+                if (node == null)
+                    continue;
 
-                CacheMapConnections(mapCache[node.Coordinate]);
+                int processed = 0;
+                if (mapCache.TryGetValue(node.Coordinate, out Node cachedNode))
+                    processed = RefreshCachedMapNode(node, cachedNode);
+                else
+                    processed = CacheNewMapNode(node);
+
+                count += processed;
+
+                if (mapCache.TryGetValue(node.Coordinate, out Node justCached) && justCached != null)
+                    CacheMapConnections(justCached);
 
             }
             // stop timer
@@ -644,18 +651,21 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private int CacheNewMapNode(AtlasNodeDescription node)
     {
-        string mapId = node.Element.Area.Id.Trim();
+        if (node?.Element?.Area == null)
+            return 0;
+
+        string mapId = node.Element.Area.Id?.Trim() ?? string.Empty;
         string shortID = mapId.Replace("_NoBoss", "");
         Node newNode = new()
         {
-            IsUnlocked = node.Element.IsUnlocked,
-            IsVisible = node.Element.IsVisible,
-            IsVisited = node.Element.IsVisited,
-            IsActive = node.Element.IsActive,
+            IsUnlocked = node.Element?.IsUnlocked ?? false,
+            IsVisible = node.Element?.IsVisible ?? false,
+            IsVisited = node.Element?.IsVisited ?? false,
+            IsActive = node.Element?.IsActive ?? false,
             ParentAddress = node.Address,
-            Address = node.Element.Address,
+            Address = node.Element?.Address ?? 0,
             Coordinates = node.Coordinate,
-            Name = node.Element.Area.Name,
+            Name = node.Element?.Area?.Name ?? "Unknown",
             Id = mapId,
             MapNode = node,
             MapType = Settings.MapTypes.Maps.TryGetValue(shortID, out Map mapType) ? mapType : Settings.MapTypes.Maps.Where(x => x.Value.MatchID(mapId)).Select(x => x.Value).FirstOrDefault() ?? new Map()
@@ -732,15 +742,18 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private int RefreshCachedMapNode(AtlasNodeDescription node, Node cachedNode)
     {
-        string shortID = node.Element.Area.Id.Trim().Replace("_NoBoss", "");
-        cachedNode.IsUnlocked = node.Element.IsUnlocked;
-        cachedNode.IsVisible = node.Element.IsVisible;
-        cachedNode.IsVisited = node.Element.IsVisited || (!node.Element.IsUnlocked && node.Element.IsVisited);
-        cachedNode.IsActive = node.Element.IsActive;
-        cachedNode.Address = node.Element.Address;
+        if (node?.Element?.Area == null)
+            return 0;
+
+        string shortID = (node.Element.Area.Id?.Trim() ?? string.Empty).Replace("_NoBoss", "");
+        cachedNode.IsUnlocked = node.Element?.IsUnlocked ?? false;
+        cachedNode.IsVisible = node.Element?.IsVisible ?? false;
+        cachedNode.IsVisited = (node.Element?.IsVisited ?? false) || (!(node.Element?.IsUnlocked ?? true) && (node.Element?.IsVisited ?? false));
+        cachedNode.IsActive = node.Element?.IsActive ?? false;
+        cachedNode.Address = node.Element?.Address ?? 0;
         cachedNode.ParentAddress = node.Address;     
         cachedNode.MapNode = node;
-        cachedNode.MapType = Settings.MapTypes.Maps.TryGetValue(shortID, out Map mapType) ? mapType : Settings.MapTypes.Maps.Where(x => x.Value.MatchID(node.Element.Area.Id)).Select(x => x.Value).FirstOrDefault() ?? new Map();
+        cachedNode.MapType = Settings.MapTypes.Maps.TryGetValue(shortID, out Map mapType) ? mapType : Settings.MapTypes.Maps.Where(x => x.Value.MatchID(node.Element.Area.Id ?? string.Empty)).Select(x => x.Value).FirstOrDefault() ?? new Map();
 
         if (cachedNode.IsVisited)
             return 1;
@@ -840,21 +853,32 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
     private void AddNodeContentTypesFromTextures(AtlasNodeDescription node, Node toNode) {
 
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Corrupt")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted", out Content corruption))
-                toNode.Content.TryAdd(corruption.Name, corruption);
+        try {
+            var first = node?.Element?.GetChildAtIndex(0);
+            var second = first?.GetChildAtIndex(0);
+            var children = second?.Children;
+            if (children == null)
+                return;
 
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("CorruptionNexus")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted Nexus", out Content nexus))
-                toNode.Content.TryAdd(nexus.Name, nexus);
+            if (children.Any(x => x?.TextureName?.Contains("Corrupt", StringComparison.OrdinalIgnoreCase) == true))
+                if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted", out Content corruption))
+                    toNode.Content.TryAdd(corruption.Name, corruption);
 
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Sanctification")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("Cleansed", out Content cleansed))
-                toNode.Content.TryAdd(cleansed.Name, cleansed);
+            if (children.Any(x => x?.TextureName?.Contains("CorruptionNexus", StringComparison.OrdinalIgnoreCase) == true))
+                if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted Nexus", out Content nexus))
+                    toNode.Content.TryAdd(nexus.Name, nexus);
 
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("UniqueMap")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("UniqueMap", out Content uniqueMap))
-                toNode.Content.TryAdd(uniqueMap.Name, uniqueMap);
+            if (children.Any(x => x?.TextureName?.Contains("Sanctification", StringComparison.OrdinalIgnoreCase) == true))
+                if (Settings.MapContent.ContentTypes.TryGetValue("Cleansed", out Content cleansed))
+                    toNode.Content.TryAdd(cleansed.Name, cleansed);
+
+            if (children.Any(x => x?.TextureName?.Contains("UniqueMap", StringComparison.OrdinalIgnoreCase) == true))
+                if (Settings.MapContent.ContentTypes.TryGetValue("UniqueMap", out Content uniqueMap))
+                    toNode.Content.TryAdd(uniqueMap.Name, uniqueMap);
+        }
+        catch (Exception) {
+            // swallow; missing children are expected sometimes
+        }
 
     }
     #endregion
