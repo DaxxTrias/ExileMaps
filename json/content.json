@@ -39,6 +39,11 @@
     "Weight": 4.5,
     "Color": "220, 0, 208, 255"
   },
+  "Anomaly Map Boss": {
+    "Name": "Anomaly Map Boss",
+    "Weight": 6.5,
+    "Color": "220, 0, 208, 255"
+  },
   "Unique Map": {
     "Name": "Unique Map",
     "Weight": 5.0,
@@ -47,6 +52,11 @@
   "Ritual": {
     "Color": "200, 178, 34, 34",
     "Name": "Ritual",
+    "Weight": 4.0
+  }, 
+  "Tower": {
+    "Color": "200, 178, 178, 34",
+    "Name": "Tower",
     "Weight": 4.0
   },
   "Abyss": {

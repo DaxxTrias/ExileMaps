@@ -385,11 +385,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Ritual");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Abyss");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Map Boss");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Anomaly Map Boss");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Cleansed");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted Nexus");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Irradiated");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Unique Map");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Tower");
             DrawConnections(cachedNode, nodeCurrentPosition);
             DrawMapNode(cachedNode, nodeCurrentPosition);            
             DrawTowerMods(cachedNode, nodeCurrentPosition);
@@ -569,7 +571,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             Vector2 end = nextNode.MapNode.Element.GetClientRect().Center;
 
             // Draw path line with a different color/style to distinguish from regular connections
-            Graphics.DrawLine(start, end, Settings.Graphics.MapLineWidth + 2, Settings.Graphics.PathLineColor);
+            Graphics.DrawLine(start, end, Settings.Graphics.WaypointLineWidth , Settings.Graphics.PathLineColor);
         }
     }
 
@@ -612,6 +614,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             try {
                 
                 AddNodeContentTypesFromTextures(node, newNode);
+                AddNodeContentTowers(node, newNode);
 
                 if (node.Element.Content != null)  
                     foreach(var content in node.Element.Content.Where(x => x.Name != "").AsParallel().ToList())        
@@ -693,7 +696,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         cachedNode.Content.Clear();
 
         AddNodeContentTypesFromTextures(node, cachedNode);
-
+        AddNodeContentTowers(node, cachedNode);
 
         if (node.Element.Content != null)
             foreach(var content in node.Element.Content.Where(x => x.Name != ""))           
@@ -771,8 +774,20 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 toNode.Content.TryAdd(cleansed.Name, cleansed);
 
         if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("UniqueMap")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("UniqueMap", out Content uniqueMap))
+            if (Settings.MapContent.ContentTypes.TryGetValue("Unique Map", out Content uniqueMap))
                 toNode.Content.TryAdd(uniqueMap.Name, uniqueMap);
+        
+        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("MapBossSpecial")))
+            if (Settings.MapContent.ContentTypes.TryGetValue("Anomaly Map Boss", out Content mapBossSpecial))
+                toNode.Content.TryAdd(mapBossSpecial.Name, mapBossSpecial);
+
+    }
+    private void AddNodeContentTowers(AtlasNodeDescription node, Node toNode) {
+        var aux = (node.Element.Height == 110); // tower height is 110
+        if (aux)
+            if (Settings.MapContent.ContentTypes.TryGetValue("Tower", out Content tower))
+                toNode.Content.TryAdd(tower.Name, tower);
+
 
     }
     #endregion
@@ -856,6 +871,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         return 1;
     }
     
+
     /// MARK: DrawWaypointLine
     /// Draws a line from the center of the screen to the specified map node on the atlas.
     /// </summary>
@@ -966,8 +982,18 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 effects = cachedNode.Effects.Where(x => x.Value.Sources.Contains(cachedNode.Coordinates)).Select(x => x.Value).ToList();
 
                 if (effects.Count == 0 && cachedNode.IsVisited)
+                {
                     DrawCenteredTextWithBackground("MISSING TABLET", nodeCurrentPosition.Center + new Vector2(0, Settings.MapMods.MapModOffset), Color.Red, Settings.Graphics.BackgroundColor, true, 10, 4);
-                }
+
+                    if (Settings.Features.MissingTabletTowerContentRing)
+                    {
+                        cachedNode.Content.TryGetValue("Tower", out Content cachedContent);
+                        float radius = (0 * Settings.Graphics.RingWidth) + 1 + ((nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 2 * Settings.Graphics.RingRadius); //DRAWING CIRCLES AROUND TOWERS TO SEE THEM IF THEY CAN BE USED
+                        Graphics.DrawCircle(nodeCurrentPosition.Center, radius, Settings.MapContent.ContentTypes.FirstOrDefault(x => x.Value.Name == "Tower").Value.Color, Settings.Graphics.RingWidth, 32);
+                    }
+                }                    
+
+            }
         } else {
             if (Settings.MapMods.ShowOnMaps && !cachedNode.IsVisited) {
                 effects = cachedNode.Effects.Where(x => x.Value.Enabled).Select(x => x.Value).ToList();
@@ -1336,14 +1362,14 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0, 0, 0, 0));
             if (ImGui.BeginTable("waypoint_list_table", 9, flags))//, new Vector2(-1, panelSize.Y/3)))
             {
-                ImGui.TableSetupColumn("Enable", ImGuiTableColumnFlags.WidthFixed, 30);                                                               
-                ImGui.TableSetupColumn("Waypoint Name", ImGuiTableColumnFlags.WidthFixed, 300);
-                ImGui.TableSetupColumn("Steps", ImGuiTableColumnFlags.WidthFixed, 50);
+                ImGui.TableSetupColumn("Enable", ImGuiTableColumnFlags.WidthFixed, 50);                                                               
+                ImGui.TableSetupColumn("Waypoint Name", ImGuiTableColumnFlags.WidthFixed, 280);
+                ImGui.TableSetupColumn("Steps", ImGuiTableColumnFlags.WidthFixed, 40);
                 ImGui.TableSetupColumn("X", ImGuiTableColumnFlags.WidthFixed, 40);                    
                 ImGui.TableSetupColumn("Y", ImGuiTableColumnFlags.WidthFixed, 40);     
-                ImGui.TableSetupColumn("Color", ImGuiTableColumnFlags.WidthFixed, 30);     
-                ImGui.TableSetupColumn("Scale", ImGuiTableColumnFlags.WidthFixed, 100);     
-                ImGui.TableSetupColumn("Option", ImGuiTableColumnFlags.WidthFixed, 60); 
+                ImGui.TableSetupColumn("Color", ImGuiTableColumnFlags.WidthFixed, 40);     
+                ImGui.TableSetupColumn("Scale", ImGuiTableColumnFlags.WidthFixed, 70);     
+                ImGui.TableSetupColumn("Opt", ImGuiTableColumnFlags.WidthFixed, 80); 
                 ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch, 50);
                 ImGui.TableHeadersRow();                    
 
@@ -1408,7 +1434,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     // Scale
                     ImGui.TableNextColumn();
                     float _scale = waypoint.Scale;
-                    ImGui.SetNextItemWidth(100);
+                    ImGui.SetNextItemWidth(70);
                     if(ImGui.SliderFloat($"##{id}_weight", ref _scale, 0.1f, 2.0f, "%.2f"))                        
                         waypoint.Scale = _scale;
 
@@ -1416,8 +1442,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     // Buttons
                     ImGui.TableNextColumn();
                     ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - 50.0f) / 2.0f);
-                    ImGui.SetNextItemWidth(60);
-                    if (ImGui.Button("Delete")) {
+                    ImGui.SetNextItemWidth(50);
+                    if (ImGui.Button("Del")) {
                         RemoveWaypoint(waypoint);
                     }
                     ImGui.PopID();
