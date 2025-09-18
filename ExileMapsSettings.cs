@@ -69,6 +69,9 @@ public class FeatureSettings
     [Menu("Draw Labels on Waypoint Lines", "Draw the name and distance to the node on the indicator lines, if enabled")]
     public ToggleNode DrawLineLabels { get; set; } = new ToggleNode(true);
 
+    [Menu("Draw content ring on completed but missing tablet towers")]
+    public ToggleNode MissingTabletTowerContentRing { get; set; } = new ToggleNode(false);
+
     [Menu("Debug Mode")]
     public ToggleNode DebugMode { get; set; } = new ToggleNode(false);
 
@@ -131,7 +134,7 @@ public class GraphicSettings
     [Menu("Line Color", "Color of the map connection lines and waypoint lines when no map specific color is set")]
     public ColorNode LineColor { get; set; } = new ColorNode(Color.FromArgb(200, 255, 222, 222));
 
-    [Menu("Line Width", "Width of the map connection lines and waypoint lines")]
+    [Menu("Line Width", "Width of the map connection lines")]
     public RangeNode<float> MapLineWidth { get; set; } = new RangeNode<float>(3.0f, 0, 10);
 
     [Menu("Visited Line Color", "Color of the map connection lines when an both nodes are visited.")]
@@ -159,6 +162,9 @@ public class GraphicSettings
 
     [Menu("Waypoint path color", "Color of the path lines to waypoints")]
     public ColorNode PathLineColor { get; set; } = new ColorNode(Color.FromArgb(255, 255, 140, 0));
+
+    [Menu("Waypoint Line Width", "Width of the map waypoint lines")]
+    public RangeNode<float> WaypointLineWidth { get; set; } = new RangeNode<float>(3.0f, 0, 10);
 }
 
 [Submenu(CollapsedByDefault = true)]
