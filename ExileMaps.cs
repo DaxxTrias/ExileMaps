@@ -101,10 +101,19 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     public override void Tick()
     {
+        // Defensive null checks for UI during scene transitions
+        if (GameController?.Game?.IngameState?.IngameUi == null)
+            return;
+
         UI = GameController.Game.IngameState.IngameUi;
+        
+        // WorldMap or AtlasPanel can be null during area transitions
+        if (UI.WorldMap == null)
+            return;
+
         AtlasPanel = UI.WorldMap.AtlasPanel;
 
-        if (!AtlasPanel.IsVisible) {
+        if (AtlasPanel == null || !AtlasPanel.IsVisible) {
             AtlasHasBeenClosed = true;
             WaypointPanelIsOpen = false;
             return;
@@ -250,7 +259,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         hotkey.OnValueChanged += () => { Input.RegisterKey(hotkey); };
     }
     private void CheckKeybinds() {
-        if (!AtlasPanel.IsVisible)
+        // Defensive null check - AtlasPanel can be null during scene transitions
+        if (AtlasPanel == null || !AtlasPanel.IsVisible)
             return;
 
         if (Settings.Keybinds.RefreshMapCacheHotkey.PressedOnce()) {  
