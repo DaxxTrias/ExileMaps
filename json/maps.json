@@ -393,8 +393,9 @@
     "Weight": -10
   },
   "MapDerelictMansion": {
-    "Name": "Derelict Mansion",
+    "Name": "Mansion in the Mists",
     "IDs": [
+      "MapDerelictMansion",
       "MapDerelictMansion_NoBoss"
     ],
     "ShortestId": "MapDerelictMansion",
