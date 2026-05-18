@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -36,6 +36,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private const string defaultContentPath = "json\\content.json";
     private const string ArrowPath = "textures\\arrow.png";
     private const string IconsFile = "Icons.png";
+    private static readonly Color UnknownContentColor = Color.FromArgb(180, 180, 180, 180);
+    private static readonly Color UnknownModColor = Color.FromArgb(180, 180, 180, 180);
     
     public IngameUIElements UI;
     public AtlasPanel AtlasPanel;
@@ -62,6 +64,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private bool AtlasHasBeenClosed = true;
     private bool WaypointPanelIsOpen = false;
     private bool ShowMinimap = false;
+    private readonly object unknownLogLock = new();
+    private readonly HashSet<string> loggedUnknownMaps = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> loggedUnknownContentTypes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> loggedUnknownMods = new(StringComparer.OrdinalIgnoreCase);
 
 
     #endregion
@@ -400,23 +406,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return;
         }
 
-        var ringCount = 0;           
         RectangleF nodeCurrentPosition = cachedNode.MapNode.Element.GetClientRect();
 
         try {
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Breach");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Delirium");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Expedition");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Ritual");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Abyss");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Map Boss");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Anomaly Map Boss");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Cleansed");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted Nexus");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Irradiated");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Unique Map");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Tower");
+            DrawContentRings(cachedNode, nodeCurrentPosition);
             DrawConnections(cachedNode, nodeCurrentPosition);
             DrawMapNode(cachedNode, nodeCurrentPosition);            
             DrawTowerMods(cachedNode, nodeCurrentPosition);
@@ -661,13 +654,185 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
     }
 
+    private Map ResolveMapType(AtlasNodeDescription node)
+    {
+        string mapId = node.Element.Area.Id?.Trim() ?? string.Empty;
+        string shortID = NormalizeMapId(mapId);
+
+        if (!string.IsNullOrEmpty(shortID) && Settings.MapTypes.Maps.TryGetValue(shortID, out Map exactMap))
+            return exactMap;
+
+        Map? matchedMap = Settings.MapTypes.Maps
+            .Where(x => x.Value.MatchID(mapId) || x.Value.MatchID(shortID))
+            .Select(x => x.Value)
+            .FirstOrDefault();
+
+        return matchedMap ?? AddUnknownMapType(node, mapId, shortID);
+    }
+
+    private Map AddUnknownMapType(AtlasNodeDescription node, string mapId, string shortID)
+    {
+        string key = !string.IsNullOrWhiteSpace(shortID) ? shortID : $"UnknownMap_{node.Address:X}";
+
+        if (Settings.MapTypes.Maps.TryGetValue(key, out Map existingMap))
+            return existingMap;
+
+        string mapName = string.IsNullOrWhiteSpace(node.Element.Area.Name) ? key : node.Element.Area.Name.Trim();
+        string[] ids = BuildMapIds(mapId, shortID);
+        Map unknownMap = new()
+        {
+            Name = mapName,
+            IDs = ids,
+            ShortestId = shortID,
+            Weight = 1.0f,
+            NameColor = Color.White,
+            BackgroundColor = Color.FromArgb(220, 0, 0, 0),
+            NodeColor = Color.FromArgb(200, 155, 155, 155),
+            Highlight = true
+        };
+
+        Settings.MapTypes.Maps.TryAdd(key, unknownMap);
+        LogUnknownOnce(loggedUnknownMaps, key, $"Discovered unknown map type: {mapName} ({string.Join(", ", ids)})");
+
+        return Settings.MapTypes.Maps.TryGetValue(key, out existingMap) ? existingMap : unknownMap;
+    }
+
+    private static string NormalizeMapId(string mapId) => (mapId ?? string.Empty).Trim().Replace("_NoBoss", "");
+
+    private static string[] BuildMapIds(string mapId, string shortID)
+    {
+        List<string> ids = [];
+
+        if (!string.IsNullOrWhiteSpace(mapId))
+            ids.Add(mapId.Trim());
+
+        if (!string.IsNullOrWhiteSpace(shortID))
+        {
+            ids.Add(shortID.Trim());
+            ids.Add($"{shortID.Trim()}_NoBoss");
+        }
+
+        return [.. ids.Distinct(StringComparer.OrdinalIgnoreCase)];
+    }
+
+    private Content? ResolveContentType(string contentName)
+    {
+        if (string.IsNullOrWhiteSpace(contentName))
+            return null;
+
+        string key = contentName.Trim();
+
+        if (Settings.MapContent.ContentTypes.TryGetValue(key, out Content knownContent))
+            return knownContent;
+
+        Content unknownContent = new()
+        {
+            Name = key,
+            Weight = 0.0f,
+            Color = UnknownContentColor,
+            Highlight = true
+        };
+
+        Settings.MapContent.ContentTypes.TryAdd(key, unknownContent);
+        LogUnknownOnce(loggedUnknownContentTypes, key, $"Discovered unknown map content type: {key}");
+
+        return Settings.MapContent.ContentTypes.TryGetValue(key, out knownContent) ? knownContent : unknownContent;
+    }
+
+    private void AddContentToNode(Node node, string contentName)
+    {
+        Content? content = ResolveContentType(contentName);
+        if (content == null)
+            return;
+
+        node.Content.TryAdd(content.Name, content);
+    }
+
+    private Mod ResolveMapMod(long modId)
+    {
+        string key = modId.ToString();
+        Settings.MapMods.MapModTypes ??= [];
+
+        if (Settings.MapMods.MapModTypes.TryGetValue(key, out Mod knownMod))
+            return knownMod;
+
+        Mod unknownMod = new()
+        {
+            ModID = $"UnknownTowerMod_{key}",
+            Name = $"Unknown Tower Mod {key}",
+            Description = $"Unknown tower mod {key}: $",
+            Stat2 = string.Empty,
+            Weight = 0.0f,
+            MinValue1 = 0.0f,
+            MaxValue1 = 0.0f,
+            MinValue2 = 0.0f,
+            MaxValue2 = 0.0f,
+            MinValueToShow = 0.0f,
+            ShowOnMap = false,
+            Color = UnknownModColor
+        };
+
+        Settings.MapMods.MapModTypes.TryAdd(key, unknownMod);
+        LogUnknownOnce(loggedUnknownMods, key, $"Discovered unknown tower mod id: {key}");
+
+        return Settings.MapMods.MapModTypes.TryGetValue(key, out knownMod) ? knownMod : unknownMod;
+    }
+
+    private void AddTowerEffectsToNode(AtlasNodeDescription node, Node targetNode)
+    {
+        foreach (var source in AtlasPanel.EffectSources.Where(x => Vector2.Distance(x.Coordinate, node.Coordinate) <= 11).ToList())
+        {
+            foreach (var effect in source.Effects.Where(x => x.Value != 0).ToList())
+            {
+                string effectKey = effect.ModId.ToString();
+                Mod mod = ResolveMapMod(effect.ModId);
+                string requiredContent = mod.RequiredContent ?? string.Empty;
+
+                if (targetNode.Effects.TryGetValue(effectKey, out Effect? existingEffect))
+                {
+                    if (!targetNode.IsTower || !targetNode.IsVisited)
+                        existingEffect.Value1 += effect.Value;
+
+                    existingEffect.Sources.Add(source.Coordinate);
+                    continue;
+                }
+
+                Effect newEffect = new()
+                {
+                    Name = mod.Name,
+                    Description = mod.Description,
+                    Value1 = effect.Value,
+                    ID = effect.ModId,
+                    Enabled = mod.ShowOnMap &&
+                                !(Settings.MapMods.OnlyDrawApplicableMods &&
+                                  !string.IsNullOrEmpty(requiredContent) &&
+                                  (targetNode.Content == null || !targetNode.Content.Any(x => x.Value.Name.Contains(requiredContent)))),
+                    Sources = [source.Coordinate]
+                };
+
+                targetNode.Effects.TryAdd(effectKey, newEffect);
+            }
+        }
+    }
+
+    private void LogUnknownOnce(HashSet<string> seen, string key, string message)
+    {
+        if (!Settings.Features.DebugMode || string.IsNullOrWhiteSpace(key))
+            return;
+
+        lock (unknownLogLock)
+        {
+            if (seen.Add(key))
+                LogMessage(message);
+        }
+    }
+
     private int CacheNewMapNode(AtlasNodeDescription node)
     {
         if (node?.Element?.Area == null)
             return 0;
 
         string mapId = node.Element.Area.Id?.Trim() ?? string.Empty;
-        string shortID = mapId.Replace("_NoBoss", "");
         Node newNode = new()
         {
             IsUnlocked = node.Element?.IsUnlocked ?? false,
@@ -680,7 +845,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             Name = node.Element?.Area?.Name ?? "Unknown",
             Id = mapId,
             MapNode = node,
-            MapType = Settings.MapTypes.Maps.TryGetValue(shortID, out Map mapType) ? mapType : Settings.MapTypes.Maps.Where(x => x.Value.MatchID(mapId)).Select(x => x.Value).FirstOrDefault() ?? new Map()
+            MapType = ResolveMapType(node)
         };
 
         // Set Content
@@ -691,10 +856,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 AddNodeContentTypesFromTextures(node, newNode);
                 AddNodeContentTowers(node, newNode);
 
-                if (node.Element.Content != null)  
-                    foreach(var content in node.Element.Content.Where(x => x.Name != "").AsParallel().ToList())        
-                        if (Settings.MapContent.ContentTypes.TryGetValue(content.Name, out Content newContent))
-                            newNode.Content.TryAdd(newContent.Name, newContent);
+                var nodeContent = node.Element?.Content;
+                if (nodeContent != null)  
+                    foreach(var content in nodeContent.Where(x => !string.IsNullOrWhiteSpace(x.Name)).ToList())        
+                        AddContentToNode(newNode, content.Name);
 
             } catch (Exception e) {
                 LogError($"Error getting Content for map type {node.Address.ToString("X")}: " + e.Message);
@@ -702,7 +867,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             
             // Set Biomes
             try {
-                var biomes = Settings.MapTypes.Maps.TryGetValue(mapId, out Map map) ? map.Biomes.Where(x => x != "").AsParallel().ToList() : [];
+                var biomes = newNode.MapType.Biomes.Where(x => x != "").ToList();
 
                 foreach (var biome in biomes)                     
                     if (Settings.Biomes.Biomes.TryGetValue(biome, out Biome newBiome)) 
@@ -715,33 +880,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     
         if (!newNode.IsVisited || newNode.IsTower) {
             try {
-                foreach(var source in AtlasPanel.EffectSources.Where(x => Vector2.Distance(x.Coordinate, node.Coordinate) <= 11).AsParallel().ToList()) {
-                    foreach(var effect in source.Effects.Where(x => Settings.MapMods.MapModTypes.ContainsKey(x.ModId.ToString()) && x.Value != 0).AsParallel().ToList()) {
-                        var effectKey = effect.ModId.ToString();
-                        var requiredContent = Settings.MapMods.MapModTypes[effectKey].RequiredContent;
-                        
-                        if (newNode.Effects.TryGetValue(effectKey, out Effect existingEffect)) {
-                            if (!newNode.IsTower || !newNode.IsVisited)
-                                newNode.Effects[effectKey].Value1 += effect.Value;
-
-                            newNode.Effects[effectKey].Sources.Add(source.Coordinate);
-                        } else {
-                            Effect newEffect = new() {
-                                Name = Settings.MapMods.MapModTypes[effectKey].Name,
-                                Description = Settings.MapMods.MapModTypes[effectKey].Description,
-                                Value1 = effect.Value,
-                                ID = effect.ModId,
-                                Enabled = Settings.MapMods.MapModTypes[effectKey].ShowOnMap && 
-                                            !(Settings.MapMods.OnlyDrawApplicableMods && 
-                                            !string.IsNullOrEmpty(requiredContent) && 
-                                            (newNode.Content == null || !newNode.Content.Any(x => x.Value.Name.Contains(requiredContent)))),
-                                Sources = [source.Coordinate]
-                            };
-                            
-                            newNode.Effects.TryAdd(effectKey, newEffect);
-                        }                                       
-                    }
-                }
+                AddTowerEffectsToNode(node, newNode);
             } catch (Exception e) {
                 LogError($"Error getting Tower Effects for map {newNode.Coordinates}: " + e.Message);
             }
@@ -758,7 +897,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (node?.Element?.Area == null)
             return 0;
 
-        string shortID = (node.Element.Area.Id?.Trim() ?? string.Empty).Replace("_NoBoss", "");
+        string mapId = node.Element.Area.Id?.Trim() ?? string.Empty;
         cachedNode.IsUnlocked = node.Element?.IsUnlocked ?? false;
         cachedNode.IsVisible = node.Element?.IsVisible ?? false;
         cachedNode.IsVisited = (node.Element?.IsVisited ?? false) || (!(node.Element?.IsUnlocked ?? true) && (node.Element?.IsVisited ?? false));
@@ -766,7 +905,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         cachedNode.Address = node.Element?.Address ?? 0;
         cachedNode.ParentAddress = node.Address;     
         cachedNode.MapNode = node;
-        cachedNode.MapType = Settings.MapTypes.Maps.TryGetValue(shortID, out Map mapType) ? mapType : Settings.MapTypes.Maps.Where(x => x.Value.MatchID(node.Element.Area.Id ?? string.Empty)).Select(x => x.Value).FirstOrDefault() ?? new Map();
+        cachedNode.Id = mapId;
+        cachedNode.Name = node.Element?.Area?.Name ?? "Unknown";
+        cachedNode.MapType = ResolveMapType(node);
 
         if (cachedNode.IsVisited)
             return 1;
@@ -776,48 +917,16 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         AddNodeContentTypesFromTextures(node, cachedNode);
         AddNodeContentTowers(node, cachedNode);
 
-        if (node.Element.Content != null)
-            foreach(var content in node.Element.Content.Where(x => x.Name != ""))           
+        var nodeContent = node.Element?.Content;
+        if (nodeContent != null)
+            foreach(var content in nodeContent.Where(x => !string.IsNullOrWhiteSpace(x.Name)))           
             {
-                if (Settings.MapContent.ContentTypes.TryGetValue(content.Name, out Content known))
-                {
-                    cachedNode.Content.TryAdd(known.Name, known);
-                }
-                else
-                {
-                    // Unknown content type from game data; ignore safely.
-                }
+                AddContentToNode(cachedNode, content.Name);
             }
 
         try {
             cachedNode.Effects.Clear();
-            foreach(var source in AtlasPanel.EffectSources.Where(x => Vector2.Distance(x.Coordinate, node.Coordinate) <= 11).ToList()) {
-                foreach(var effect in source.Effects.Where(x => Settings.MapMods.MapModTypes.ContainsKey(x.ModId.ToString()) && x.Value != 0).ToList()) {
-                    var effectKey = effect.ModId.ToString();
-                    var requiredContent = Settings.MapMods.MapModTypes[effectKey].RequiredContent;
-                    
-                    if (cachedNode.Effects.TryGetValue(effectKey, out Effect existingEffect)) {
-                        if (cachedNode.IsTower || !cachedNode.IsVisited)
-                            cachedNode.Effects[effectKey].Value1 += effect.Value;
-
-                        cachedNode.Effects[effectKey].Sources.Add(source.Coordinate);
-                    } else {
-                        Effect newEffect = new() {
-                            Name = Settings.MapMods.MapModTypes[effectKey].Name,
-                            Description = Settings.MapMods.MapModTypes[effectKey].Description,
-                            Value1 = effect.Value,
-                            ID = effect.ModId,
-                            Enabled = Settings.MapMods.MapModTypes[effectKey].ShowOnMap && 
-                                        !(Settings.MapMods.OnlyDrawApplicableMods && 
-                                        !string.IsNullOrEmpty(requiredContent) && 
-                                        (cachedNode.Content == null || !cachedNode.Content.Any(x => x.Value.Name.Contains(requiredContent)))),
-                            Sources = [source.Coordinate]
-                        };
-                        
-                        cachedNode.Effects.TryAdd(effectKey, newEffect);
-                    }                                       
-                }
-            }
+            AddTowerEffectsToNode(node, cachedNode);
         } catch (Exception e) {
             LogError($"Error getting Tower Effects for map {cachedNode.Coordinates}: " + e.Message);
         }
@@ -874,35 +983,29 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 return;
 
             if (children.Any(x => x?.TextureName?.Contains("Corrupt", StringComparison.OrdinalIgnoreCase) == true))
-                if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted", out Content corruption))
-                    toNode.Content.TryAdd(corruption.Name, corruption);
+                AddContentToNode(toNode, "Corrupted");
 
             if (children.Any(x => x?.TextureName?.Contains("CorruptionNexus", StringComparison.OrdinalIgnoreCase) == true))
-                if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted Nexus", out Content nexus))
-                    toNode.Content.TryAdd(nexus.Name, nexus);
+                AddContentToNode(toNode, "Corrupted Nexus");
 
             if (children.Any(x => x?.TextureName?.Contains("Sanctification", StringComparison.OrdinalIgnoreCase) == true))
-                if (Settings.MapContent.ContentTypes.TryGetValue("Cleansed", out Content cleansed))
-                    toNode.Content.TryAdd(cleansed.Name, cleansed);
+                AddContentToNode(toNode, "Cleansed");
 
             if (children.Any(x => x?.TextureName?.Contains("UniqueMap", StringComparison.OrdinalIgnoreCase) == true))
-                if (Settings.MapContent.ContentTypes.TryGetValue("Unique Map", out Content uniqueMap))
-                    toNode.Content.TryAdd(uniqueMap.Name, uniqueMap);
+                AddContentToNode(toNode, "Unique Map");
+
+            if (children.Any(x => x?.TextureName?.Contains("MapBossSpecial", StringComparison.OrdinalIgnoreCase) == true))
+                AddContentToNode(toNode, "Anomaly Map Boss");
         }
         catch (Exception) {
             // swallow; missing children are expected sometimes
         }
-        
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("MapBossSpecial")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("Anomaly Map Boss", out Content mapBossSpecial))
-                toNode.Content.TryAdd(mapBossSpecial.Name, mapBossSpecial);
 
     }
     private void AddNodeContentTowers(AtlasNodeDescription node, Node toNode) {
         var aux = (node.Element.Height == 110); // tower height is 110
         if (aux)
-            if (Settings.MapContent.ContentTypes.TryGetValue("Tower", out Content tower))
-                toNode.Content.TryAdd(tower.Name, tower);
+            AddContentToNode(toNode, "Tower");
 
 
     }
@@ -971,13 +1074,19 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     /// <param name="Draw">A boolean indicating whether to draw the circle or not.</param>
     /// <param name="color">The color of the circle to be drawn.</param>
     /// <returns>Returns 1 if the circle is drawn, otherwise returns 0.</returns>
-    private int DrawContentRings(Node cachedNode, RectangleF nodeCurrentPosition, int Count, string Content)
+    private void DrawContentRings(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        int ringCount = 0;
+        foreach (Content content in cachedNode.Content.Values.Where(x => x != null).OrderBy(x => x.Name))
+            ringCount += DrawContentRing(cachedNode, nodeCurrentPosition, ringCount, content);
+    }
+
+    private int DrawContentRing(Node cachedNode, RectangleF nodeCurrentPosition, int Count, Content cachedContent)
     {
         if ((cachedNode.IsVisited && !cachedNode.IsAttempted) || 
             (!Settings.MapContent.ShowRingsOnLockedNodes && !cachedNode.IsUnlocked) || 
             (!Settings.MapContent.ShowRingsOnUnlockedNodes && cachedNode.IsUnlocked) || 
             (!Settings.MapContent.ShowRingsOnHiddenNodes && !cachedNode.IsVisible) ||         
-            !cachedNode.Content.TryGetValue(Content, out Content cachedContent) || 
             !cachedNode.MapType.Highlight || !cachedContent.Highlight)            
             return 0;
 
