@@ -585,8 +585,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         averageMapWeight = mapNodes.Count > 0 ? mapNodes.Average() : 0;
         // Get the standard deviation of the map nodes
         // Get the max and min map weights
-        maxMapWeight = mapNodes.Count > 0 ? mapNodes.OrderByDescending(x => x).Skip(10).Max() : 0;
-        minMapWeight = mapNodes.Count > 0 ? mapNodes.OrderBy(x => x).Skip(5).Min() : 0;
+        maxMapWeight = mapNodes.Count > 10 ? mapNodes.OrderByDescending(x => x).Skip(10).Max() : (mapNodes.Count > 0 ? mapNodes.Max() : 0);
+        minMapWeight = mapNodes.Count > 5 ? mapNodes.OrderBy(x => x).Skip(5).Min() : (mapNodes.Count > 0 ? mapNodes.Min() : 0);
     }
 
     private int CacheNewMapNode(AtlasNodeDescription node)
@@ -638,39 +638,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             }
         }
     
-        if (!newNode.IsVisited || newNode.IsTower) {
-            try {
-                foreach(var source in AtlasPanel.EffectSources.Where(x => Vector2.Distance(x.Coordinate, node.Coordinate) <= 11).AsParallel().ToList()) {
-                    foreach(var effect in source.Effects.Where(x => Settings.MapMods.MapModTypes.ContainsKey(x.ModId.ToString()) && x.Value != 0).AsParallel().ToList()) {
-                        var effectKey = effect.ModId.ToString();
-                        var requiredContent = Settings.MapMods.MapModTypes[effectKey].RequiredContent;
-                        
-                        if (newNode.Effects.TryGetValue(effectKey, out Effect existingEffect)) {
-                            if (!newNode.IsTower || !newNode.IsVisited)
-                                newNode.Effects[effectKey].Value1 += effect.Value;
-
-                            newNode.Effects[effectKey].Sources.Add(source.Coordinate);
-                        } else {
-                            Effect newEffect = new() {
-                                Name = Settings.MapMods.MapModTypes[effectKey].Name,
-                                Description = Settings.MapMods.MapModTypes[effectKey].Description,
-                                Value1 = effect.Value,
-                                ID = effect.ModId,
-                                Enabled = Settings.MapMods.MapModTypes[effectKey].ShowOnMap && 
-                                            !(Settings.MapMods.OnlyDrawApplicableMods && 
-                                            !string.IsNullOrEmpty(requiredContent) && 
-                                            (newNode.Content == null || !newNode.Content.Any(x => x.Value.Name.Contains(requiredContent)))),
-                                Sources = [source.Coordinate]
-                            };
-                            
-                            newNode.Effects.TryAdd(effectKey, newEffect);
-                        }                                       
-                    }
-                }
-            } catch (Exception e) {
-                LogError($"Error getting Tower Effects for map {newNode.Coordinates}: " + e.Message);
-            }
-        }
+        // Tower tablet mods have been removed from the game, so effect scanning is disabled.
+        // Effects stays empty; weight/rendering/waypoint code handle the empty case.
         newNode.RecalculateWeight();
 
         lock (mapCacheLock)        
@@ -699,43 +668,24 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         AddNodeContentTowers(node, cachedNode);
 
         if (node.Element.Content != null)
-            foreach(var content in node.Element.Content.Where(x => x.Name != ""))           
-                cachedNode.Content.TryAdd(content.Name, Settings.MapContent.ContentTypes[content.Name]);
-
-        try {
-            cachedNode.Effects.Clear();
-            foreach(var source in AtlasPanel.EffectSources.Where(x => Vector2.Distance(x.Coordinate, node.Coordinate) <= 11).ToList()) {
-                foreach(var effect in source.Effects.Where(x => Settings.MapMods.MapModTypes.ContainsKey(x.ModId.ToString()) && x.Value != 0).ToList()) {
-                    var effectKey = effect.ModId.ToString();
-                    var requiredContent = Settings.MapMods.MapModTypes[effectKey].RequiredContent;
-                    
-                    if (cachedNode.Effects.TryGetValue(effectKey, out Effect existingEffect)) {
-                        if (cachedNode.IsTower || !cachedNode.IsVisited)
-                            cachedNode.Effects[effectKey].Value1 += effect.Value;
-
-                        cachedNode.Effects[effectKey].Sources.Add(source.Coordinate);
-                    } else {
-                        Effect newEffect = new() {
-                            Name = Settings.MapMods.MapModTypes[effectKey].Name,
-                            Description = Settings.MapMods.MapModTypes[effectKey].Description,
-                            Value1 = effect.Value,
-                            ID = effect.ModId,
-                            Enabled = Settings.MapMods.MapModTypes[effectKey].ShowOnMap && 
-                                        !(Settings.MapMods.OnlyDrawApplicableMods && 
-                                        !string.IsNullOrEmpty(requiredContent) && 
-                                        (cachedNode.Content == null || !cachedNode.Content.Any(x => x.Value.Name.Contains(requiredContent)))),
-                            Sources = [source.Coordinate]
-                        };
-                        
-                        cachedNode.Effects.TryAdd(effectKey, newEffect);
-                    }                                       
+            foreach (var content in node.Element.Content.Where(x => x.Name != "" && !x.Name.Contains("???"))) {
+                var contentName = content.Name;
+                if (Settings.MapContent.ContentTypes.TryGetValue(contentName, out var contentType))
+                {
+                    cachedNode.Content.TryAdd(contentName, contentType);
+                }
+                else
+                {
+                    LogMessage($"ContentType not found for: {contentName} on the map {shortID} at the place {node.Element.GetChildAtIndex(0).X} : {node.Element.GetChildAtIndex(0).Y}'");
+                    // Handle the missing key case
                 }
             }
-        } catch (Exception e) {
-            LogError($"Error getting Tower Effects for map {cachedNode.Coordinates}: " + e.Message);
-        }
 
-        cachedNode.RecalculateWeight();
+        // Tower tablet mods have been removed from the game, so effect scanning is disabled.
+        cachedNode.Effects.Clear();
+
+        if (Settings.Features.RecalculateNodeWeightsOnRefresh)
+            cachedNode.RecalculateWeight();
         return 1;
     } 
     
@@ -780,6 +730,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("MapBossSpecial")))
             if (Settings.MapContent.ContentTypes.TryGetValue("Anomaly Map Boss", out Content mapBossSpecial))
                 toNode.Content.TryAdd(mapBossSpecial.Name, mapBossSpecial);
+
+                if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("ContentMapBoss.dds")))
+            if (Settings.MapContent.ContentTypes.TryGetValue("Map Boss", out Content mapBoss))
+                toNode.Content.TryAdd(mapBoss.Name, mapBoss);
 
     }
     private void AddNodeContentTowers(AtlasNodeDescription node, Node toNode) {
@@ -983,8 +937,6 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
                 if (effects.Count == 0 && cachedNode.IsVisited)
                 {
-                    DrawCenteredTextWithBackground("MISSING TABLET", nodeCurrentPosition.Center + new Vector2(0, Settings.MapMods.MapModOffset), Color.Red, Settings.Graphics.BackgroundColor, true, 10, 4);
-
                     if (Settings.Features.MissingTabletTowerContentRing)
                     {
                         cachedNode.Content.TryGetValue("Tower", out Content cachedContent);
@@ -1269,6 +1221,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
     #region Helper Functions
 
+    // Map tooltip can live under WorldMap child 13 or 14; checked in IsOnScreen.
+    private static readonly int[] TooltipChildIndices = { 13, 14 };
+
     private bool IsOnScreen(Vector2 position)
     {
         var screen = new RectangleF
@@ -1289,14 +1244,21 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             left += Math.Max(UI.OpenLeftPanel.GetClientRect().Width, UI.SettingsPanel.GetClientRect().Width);
 
         RectangleF screenRect = new RectangleF(left, screen.Top, right - left, screen.Height);
-        if (UI.WorldMap.GetChildAtIndex(9).IsVisible) {
-            RectangleF mapTooltip = UI.WorldMap.GetChildAtIndex(9).GetClientRect();                
+
+        // Don't render over the map tooltip. It can live under child 13 or 14;
+        // child 14 doesn't always exist, so each lookup is null-guarded.
+        foreach (var tooltipIndex in TooltipChildIndices) {
+            var tooltip = UI.WorldMap.GetChildAtIndex(tooltipIndex);
+            if (tooltip == null || !tooltip.IsVisible)
+                continue;
+
+            RectangleF mapTooltip = tooltip.GetClientRect();
             mapTooltip.Inflate(mapTooltip.Width * 0.1f, mapTooltip.Height * 0.1f);
 
             if (mapTooltip.Contains(position))
                 return false;
         }
-        
+
         return screenRect.Contains(position);
     }
 
@@ -1707,7 +1669,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
         Waypoint newWaypoint = cachedNode.ToWaypoint();
         newWaypoint.Icon = MapIconsIndex.LootFilterLargeWhiteUpsideDownHouse;
-        newWaypoint.Color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight);
+        //newWaypoint.Color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight);
+        newWaypoint.Color = Settings.Graphics.PathLineColor;
 
         Settings.Waypoints.Waypoints.Add(cachedNode.Coordinates.ToString(), newWaypoint);
         UpdateWaypointPaths();
@@ -1748,10 +1711,16 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         Color color = Color.FromArgb(255, waypoint.Color);
         DrawRotatedImage(arrowId, arrowPosition, arrowSize, phi, color);
-
-        Vector2 textPosition = arrowPosition + new Vector2(arrowSize.X / 2, arrowSize.Y / 2);
+         Vector2 textPosition = arrowPosition + new Vector2(arrowSize.X / 2, arrowSize.Y / 2);
         textPosition = Vector2.Lerp(textPosition, screenCenter, 0.10f);
-        DrawCenteredTextWithBackground($"{waypoint.Name} ({distance:0})", textPosition, color, Settings.Graphics.BackgroundColor, true, 10, 4);
+        if (Settings.Waypoints.InverWaypointArrowsColors)
+        {
+            DrawCenteredTextWithBackground($"{waypoint.Name} ({waypoint.StepCount:0})", textPosition,  Settings.Graphics.BackgroundColor, color, true, 10, 4);
+        }
+        else
+        {
+            DrawCenteredTextWithBackground($"{waypoint.Name} ({waypoint.StepCount:0})", textPosition, color, Settings.Graphics.BackgroundColor, true, 10, 4);
+        }
     }
 
     #endregion
