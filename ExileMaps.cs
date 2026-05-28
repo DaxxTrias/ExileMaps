@@ -698,44 +698,61 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         AddNodeContentTypesFromTextures(node, cachedNode);
         AddNodeContentTowers(node, cachedNode);
 
-        if (node.Element.Content != null)
-            foreach(var content in node.Element.Content.Where(x => x.Name != ""))           
-                cachedNode.Content.TryAdd(content.Name, Settings.MapContent.ContentTypes[content.Name]);
+        if (node.Element.Content != null )
+            foreach (var content in node.Element.Content.Where(x => x.Name != "" && !x.Name.Contains("???"))) { 
+
+                var contentName = content.Name;
+                if (Settings.MapContent.ContentTypes.TryGetValue(contentName, out var contentType))
+                {
+                    cachedNode.Content.TryAdd(contentName, contentType);
+                }
+                else
+                {
+                    LogMessage($"ContentType not found for: {contentName} on the map {shortID} at the place {node.Element.GetChildAtIndex(0).X} : {node.Element.GetChildAtIndex(0).Y}'");
+                    // Handle the missing key case
+                }
+            }
 
         try {
             cachedNode.Effects.Clear();
+            
             foreach(var source in AtlasPanel.EffectSources.Where(x => Vector2.Distance(x.Coordinate, node.Coordinate) <= 11).ToList()) {
-                foreach(var effect in source.Effects.Where(x => Settings.MapMods.MapModTypes.ContainsKey(x.ModId.ToString()) && x.Value != 0).ToList()) {
+                foreach (var effect in source.Effects.Where(x => Settings.MapMods.MapModTypes.ContainsKey(x.ModId.ToString()) && x.Value != 0).ToList())
+                {
                     var effectKey = effect.ModId.ToString();
                     var requiredContent = Settings.MapMods.MapModTypes[effectKey].RequiredContent;
-                    
-                    if (cachedNode.Effects.TryGetValue(effectKey, out Effect existingEffect)) {
+
+                    if (cachedNode.Effects.TryGetValue(effectKey, out Effect existingEffect))
+                    {
                         if (cachedNode.IsTower || !cachedNode.IsVisited)
                             cachedNode.Effects[effectKey].Value1 += effect.Value;
 
                         cachedNode.Effects[effectKey].Sources.Add(source.Coordinate);
-                    } else {
-                        Effect newEffect = new() {
+                    }
+                    else
+                    {
+                        Effect newEffect = new()
+                        {
                             Name = Settings.MapMods.MapModTypes[effectKey].Name,
                             Description = Settings.MapMods.MapModTypes[effectKey].Description,
                             Value1 = effect.Value,
                             ID = effect.ModId,
-                            Enabled = Settings.MapMods.MapModTypes[effectKey].ShowOnMap && 
-                                        !(Settings.MapMods.OnlyDrawApplicableMods && 
-                                        !string.IsNullOrEmpty(requiredContent) && 
+                            Enabled = Settings.MapMods.MapModTypes[effectKey].ShowOnMap &&
+                                        !(Settings.MapMods.OnlyDrawApplicableMods &&
+                                        !string.IsNullOrEmpty(requiredContent) &&
                                         (cachedNode.Content == null || !cachedNode.Content.Any(x => x.Value.Name.Contains(requiredContent)))),
                             Sources = [source.Coordinate]
                         };
-                        
+
                         cachedNode.Effects.TryAdd(effectKey, newEffect);
-                    }                                       
+                    }
                 }
             }
         } catch (Exception e) {
             LogError($"Error getting Tower Effects for map {cachedNode.Coordinates}: " + e.Message);
         }
 
-        cachedNode.RecalculateWeight();
+        //cachedNode.RecalculateWeight();
         return 1;
     } 
     
@@ -780,6 +797,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("MapBossSpecial")))
             if (Settings.MapContent.ContentTypes.TryGetValue("Anomaly Map Boss", out Content mapBossSpecial))
                 toNode.Content.TryAdd(mapBossSpecial.Name, mapBossSpecial);
+
+                if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("ContentMapBoss.dds")))
+            if (Settings.MapContent.ContentTypes.TryGetValue("Map Boss", out Content mapBoss))
+                toNode.Content.TryAdd(mapBoss.Name, mapBoss);
 
     }
     private void AddNodeContentTowers(AtlasNodeDescription node, Node toNode) {
@@ -1707,7 +1728,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
         Waypoint newWaypoint = cachedNode.ToWaypoint();
         newWaypoint.Icon = MapIconsIndex.LootFilterLargeWhiteUpsideDownHouse;
-        newWaypoint.Color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight);
+        //newWaypoint.Color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight);
+        newWaypoint.Color = Settings.Graphics.PathLineColor;
 
         Settings.Waypoints.Waypoints.Add(cachedNode.Coordinates.ToString(), newWaypoint);
         UpdateWaypointPaths();
@@ -1748,10 +1770,16 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         Color color = Color.FromArgb(255, waypoint.Color);
         DrawRotatedImage(arrowId, arrowPosition, arrowSize, phi, color);
-
-        Vector2 textPosition = arrowPosition + new Vector2(arrowSize.X / 2, arrowSize.Y / 2);
+         Vector2 textPosition = arrowPosition + new Vector2(arrowSize.X / 2, arrowSize.Y / 2);
         textPosition = Vector2.Lerp(textPosition, screenCenter, 0.10f);
-        DrawCenteredTextWithBackground($"{waypoint.Name} ({distance:0})", textPosition, color, Settings.Graphics.BackgroundColor, true, 10, 4);
+        if (Settings.Waypoints.InverWaypointArrowsColors)
+        {
+            DrawCenteredTextWithBackground($"{waypoint.Name} ({waypoint.StepCount:0})", textPosition,  Settings.Graphics.BackgroundColor, color, true, 10, 4);
+        }
+        else
+        {
+            DrawCenteredTextWithBackground($"{waypoint.Name} ({waypoint.StepCount:0})", textPosition, color, Settings.Graphics.BackgroundColor, true, 10, 4);
+        }
     }
 
     #endregion

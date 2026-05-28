@@ -401,3 +401,5 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+json/maps_OLD.json
+json/missing_maps.json
