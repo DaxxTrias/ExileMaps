@@ -782,6 +782,7 @@ public class WaypointSettings
     public bool PanelIsOpen { get; set; } = false;
     public bool ShowWaypoints { get; set; } = true;
     public bool ShowWaypointArrows { get; set; } = true;
+    public bool InverWaypointArrowsColors { get; set; } = true;
 
     public int WaypointPanelMaxItems { get; set; } = 30;
     public string WaypointPanelSortBy { get; set; } = "Weight";
@@ -801,8 +802,9 @@ public class WaypointSettings
                     ImGui.TableSetupColumn("Check", ImGuiTableColumnFlags.WidthFixed, 60);                                                               
                     ImGui.TableSetupColumn("Option", ImGuiTableColumnFlags.WidthStretch, 300);                     
         
-                    ImGui.TableNextRow();
 
+                    // show waypoints
+                    ImGui.TableNextRow();
                     ImGui.TableNextColumn();
                     bool _show = ShowWaypoints;
                     if(ImGui.Checkbox($"##show_waypoints", ref _show))                        
@@ -811,14 +813,30 @@ public class WaypointSettings
                     ImGui.TableNextColumn();
                     ImGui.Text("Show Waypoints on Atlas");
 
+
+                    // show waypoints arrows
                     ImGui.TableNextRow();
                     ImGui.TableNextColumn();
+
                     bool _showArrows = ShowWaypointArrows;
                     if(ImGui.Checkbox($"##show_arrows", ref _showArrows))                        
                         ShowWaypointArrows = _showArrows;
 
                     ImGui.TableNextColumn();
                     ImGui.Text("Show Waypoint Arrows on Atlas");
+
+                    ImGui.TableNextRow();
+                    
+                    // invert waypoints arrows colors
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+
+                    bool _invertWaypointArrowColors = InverWaypointArrowsColors;
+                    if(ImGui.Checkbox($"##invert_waypoint_arrow_colors", ref _invertWaypointArrowColors))
+                        InverWaypointArrowsColors = _invertWaypointArrowColors;
+
+                    ImGui.TableNextColumn();
+                    ImGui.Text("Invert Waypoint Arrows Colors on Atlas");
 
                     ImGui.TableNextRow();
 
