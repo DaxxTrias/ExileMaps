@@ -72,6 +72,9 @@ public class FeatureSettings
     [Menu("Draw content ring on completed but missing tablet towers")]
     public ToggleNode MissingTabletTowerContentRing { get; set; } = new ToggleNode(false);
 
+    [Menu("Recalculate Node Weights on Refresh", "Recompute each node's weight when the map cache refreshes so weight (and weight-based colors/sorting) reflect live content and tablet mods. Disable to save performance if weights don't need to update after the first scan.")]
+    public ToggleNode RecalculateNodeWeightsOnRefresh { get; set; } = new ToggleNode(true);
+
     [Menu("Debug Mode")]
     public ToggleNode DebugMode { get; set; } = new ToggleNode(false);
 
