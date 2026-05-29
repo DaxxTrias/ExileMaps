@@ -63,5 +63,10 @@
     "Color": "200, 178, 22, 200",
     "Name": "Abyss",
     "Weight": 4.0
+  },
+  "Powerful Map Boss": {
+    "Color": "220, 0, 208, 255",
+    "Name": "Powerful Map Boss",
+    "Weight": 4.0
   }
 }

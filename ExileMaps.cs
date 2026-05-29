@@ -43,16 +43,19 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     public AtlasPanel AtlasPanel;
 
     private Vector2 screenCenter;
+    private List<Node> selectedNodes = [];
+    private RectangleF cachedScreenRect;
+    private readonly List<RectangleF> cachedTooltipRects = [];
     private Dictionary<Vector2i, Node> mapCache = [];
     public bool refreshCache = false;
     private int cacheTicks = 0;
     private bool refreshingCache = false;
     private float maxMapWeight = 20.0f;
     private float minMapWeight = -20.0f;
-    private float averageMapWeight = 0.0f;
-    private float stdDevMapWeight = 0.0f;
     private readonly object mapCacheLock = new();
     private DateTime lastRefresh = DateTime.Now;
+    private bool weightsDirty = false;
+    private DateTime lastWeightRecalc = DateTime.Now;
     private int TickCount { get; set; }
 
     private Vector2 atlasOffset;
@@ -154,12 +157,20 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 }
             });
             job.Start();
-            
+
         }
-        if (!refreshingCache)
-        {
-            UpdateWaypointPaths();
+
+        // Coalesce settings-change weight recalcs. Slider drags fire PropertyChanged many times per
+        // second; instead of recomputing bounds on each, mark dirty and recompute at most ~4x/sec.
+        if (weightsDirty && !refreshingCache && DateTime.Now.Subtract(lastWeightRecalc).TotalMilliseconds > 250) {
+            weightsDirty = false;
+            lastWeightRecalc = DateTime.Now;
+            RecalculateWeights();
         }
+
+        // Waypoint paths only change when nodes get visited (which triggers a cache refresh) or when
+        // waypoints are added/removed. RefreshMapCache and Add/RemoveWaypoint already recompute them,
+        // so there's no need to rerun the full per-waypoint BFS + closest-visited-node scan every tick.
 
         return;
     }
@@ -171,24 +182,59 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (WaypointPanelIsOpen) DrawWaypointPanel();
 
         TickCount++;
-        if (Settings.Graphics.RenderNTicks.Value % TickCount != 0) return;  
-
-        TickCount = 0;
 
         if (!AtlasPanel.IsVisible) return;
         if (mapCache.Count == 0) RefreshMapCache();
-        
-        // Filter out nodes based on settings.
-        List<Node> selectedNodes;
-        lock (mapCacheLock) {
-            selectedNodes = mapCache.Values.Where(x => Settings.Features.ProcessVisitedNodes || !x.IsVisited || x.IsAttempted)
-                .Where(x => (Settings.Features.ProcessHiddenNodes && !x.IsVisible) || x.IsVisible || x.IsTower)            
-                .Where(x => (Settings.Features.ProcessLockedNodes && !x.IsUnlocked) || x.IsUnlocked)
-                .Where(x => (Settings.Features.ProcessUnlockedNodes && x.IsUnlocked) || !x.IsUnlocked)
-                .Where(x => IsOnScreen(x.MapNode.Element.GetClientRect().Center)).AsParallel().ToList();
+
+        // Cache panel/tooltip bounds once per frame so IsOnScreen avoids repeated game-memory reads.
+        UpdateScreenBounds();
+
+        // Recompute the on-screen node set only every RenderNTicks frames (the filter is expensive:
+        // per-node GetClientRect + IsOnScreen over the whole atlas), but redraw the cached set every
+        // frame so the immediate-mode overlay never flickers. Node positions stay live because
+        // RenderNode reads GetClientRect fresh each frame.
+        if (TickCount % Settings.Graphics.RenderNTicks.Value == 0 || selectedNodes.Count == 0) {
+            lock (mapCacheLock) {
+                selectedNodes = mapCache.Values.AsParallel()
+                    .Where(x => Settings.Features.ProcessVisitedNodes || !x.IsVisited || x.IsAttempted)
+                    .Where(x => (Settings.Features.ProcessHiddenNodes && !x.IsVisible) || x.IsVisible || x.IsTower)
+                    .Where(x => (Settings.Features.ProcessLockedNodes && !x.IsUnlocked) || x.IsUnlocked)
+                    .Where(x => (Settings.Features.ProcessUnlockedNodes && x.IsUnlocked) || !x.IsUnlocked)
+                    .Where(x => IsOnScreen(x.MapNode.Element.GetClientRect().Center)).ToList();
+            }
         }
-        
-        selectedNodes.ForEach(RenderNode);
+
+        if (!ShowMinimap) {
+            // Resolve each node's screen rect once per frame, then draw in fixed z-layers across the
+            // whole set: lines -> node fills -> rings -> labels. Layered passes (rather than one full
+            // draw per node) keep the z-order globally consistent and stop lines flickering over
+            // circles/labels.
+            var nodePositions = new List<(Node node, RectangleF rect)>(selectedNodes.Count);
+            foreach (var node in selectedNodes) {
+                try { nodePositions.Add((node, node.MapNode.Element.GetClientRect())); }
+                catch { /* skip nodes whose memory read fails this frame */ }
+            }
+
+            if (Settings.Features.DebugMode) {
+                foreach (var (node, _) in nodePositions)
+                    DrawDebugging(node);
+            } else {
+                // 1. Lines
+                foreach (var (node, rect) in nodePositions)
+                    DrawNodeLines(node, rect);
+                // 2. Node fills
+                foreach (var (node, rect) in nodePositions) {
+                    try { DrawMapNode(node, rect); }
+                    catch (Exception e) { LogError("Error drawing node fill: " + e.Message); }
+                }
+                // 3. Rings
+                foreach (var (node, rect) in nodePositions)
+                    DrawNodeRings(node, rect);
+                // 4. Labels
+                foreach (var (node, rect) in nodePositions)
+                    DrawNodeLabels(node, rect);
+            }
+        }
 
         try {
             List<string> waypointNames = Settings.MapTypes.Maps.Where(x => x.Value.DrawLine).Select(x => x.Value.Name).ToList();
@@ -228,14 +274,14 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     /// </summary>
     private void SubscribeToEvents() {
         try {
-            Settings.MapTypes.Maps.CollectionChanged += (_, _) => { RecalculateWeights(); };
-            Settings.MapTypes.Maps.PropertyChanged += (_, _) => { RecalculateWeights(); };
-            Settings.Biomes.Biomes.PropertyChanged += (_, _) => { RecalculateWeights(); };
-            Settings.Biomes.Biomes.CollectionChanged += (_, _) => { RecalculateWeights(); };
-            Settings.MapContent.ContentTypes.CollectionChanged += (_, _) => { RecalculateWeights(); };
-            Settings.MapContent.ContentTypes.PropertyChanged += (_, _) => { RecalculateWeights(); };
-            Settings.MapMods.MapModTypes.CollectionChanged += (_, _) => { RecalculateWeights(); };
-            Settings.MapMods.MapModTypes.PropertyChanged += (_, _) => { RecalculateWeights(); };
+            Settings.MapTypes.Maps.CollectionChanged += (_, _) => { weightsDirty = true; };
+            Settings.MapTypes.Maps.PropertyChanged += (_, _) => { weightsDirty = true; };
+            Settings.Biomes.Biomes.PropertyChanged += (_, _) => { weightsDirty = true; };
+            Settings.Biomes.Biomes.CollectionChanged += (_, _) => { weightsDirty = true; };
+            Settings.MapContent.ContentTypes.CollectionChanged += (_, _) => { weightsDirty = true; };
+            Settings.MapContent.ContentTypes.PropertyChanged += (_, _) => { weightsDirty = true; };
+            Settings.MapMods.MapModTypes.CollectionChanged += (_, _) => { weightsDirty = true; };
+            Settings.MapMods.MapModTypes.PropertyChanged += (_, _) => { weightsDirty = true; };
         } catch (Exception e) {
             LogError("Error subscribing to events: " + e.Message);
         }
@@ -396,30 +442,41 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     /// Renders a map node on the atlas panel.
     /// </summary>
     /// <param name="cachedNode"></param>
-    private void RenderNode(Node cachedNode)
+    // Node rendering runs as separate passes over the whole node set, one per z-layer, so the draw
+    // order is globally fixed instead of per-node. Render calls these in order:
+    //   1. DrawNodeLines  (connections + tower range)
+    //   2. DrawMapNode    (the node fill circle)
+    //   3. DrawNodeRings  (content rings)
+    //   4. DrawNodeLabels (map name, weight, tower mod boxes)
+    // Then waypoint lines/icons/arrows draw on top (see Render). This guarantees a later node's line
+    // never lands over an earlier node's circle/ring/label, which was the source of the flicker.
+    private void DrawNodeLines(Node cachedNode, RectangleF nodeCurrentPosition)
     {
-        if (ShowMinimap) 
-            return;
-
-        if (Settings.Features.DebugMode) {
-            DrawDebugging(cachedNode);
-            return;
+        try {
+            DrawConnections(cachedNode, nodeCurrentPosition);
+            DrawTowerRange(cachedNode);
+        } catch (Exception e) {
+            LogError("Error drawing node lines: " + e.Message + " - " + e.StackTrace);
         }
+    }
 
-        RectangleF nodeCurrentPosition = cachedNode.MapNode.Element.GetClientRect();
-
+    private void DrawNodeRings(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
         try {
             DrawContentRings(cachedNode, nodeCurrentPosition);
-            DrawConnections(cachedNode, nodeCurrentPosition);
-            DrawMapNode(cachedNode, nodeCurrentPosition);            
+        } catch (Exception e) {
+            LogError("Error drawing node rings: " + e.Message + " - " + e.StackTrace);
+        }
+    }
+
+    private void DrawNodeLabels(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
             DrawTowerMods(cachedNode, nodeCurrentPosition);
             DrawMapName(cachedNode, nodeCurrentPosition);
             DrawWeight(cachedNode, nodeCurrentPosition);
-            DrawTowerRange(cachedNode);
-
         } catch (Exception e) {
-            LogError("Error drawing map node: " + e.Message + " - " + e.StackTrace);
-            return;
+            LogError("Error drawing node labels: " + e.Message + " - " + e.StackTrace);
         }
     }
     #endregion
@@ -550,6 +607,25 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         {
             List<AtlasNodeDescription> atlasNodes = [.. AtlasPanel.Descriptions];
 
+            // Snapshot connection points once and build O(1) forward + reverse lookups, instead of
+            // scanning AtlasPanel.Points twice per node.
+            var points = AtlasPanel.Points.ToList();
+            var forwardPoints = new Dictionary<Vector2i, (Vector2i, Vector2i, Vector2i, Vector2i)>(points.Count);
+            var reverseNeighbors = new Dictionary<Vector2i, List<Vector2i>>(points.Count);
+            foreach (var point in points) {
+                forwardPoints[point.Item1] = (point.Item2, point.Item3, point.Item4, point.Item5);
+
+                foreach (var neighbor in new[] { point.Item2, point.Item3, point.Item4, point.Item5 }) {
+                    if (neighbor == default)
+                        continue;
+
+                    if (!reverseNeighbors.TryGetValue(neighbor, out var sources))
+                        reverseNeighbors[neighbor] = sources = [];
+
+                    sources.Add(point.Item1);
+                }
+            }
+
             // Start timer
             var timer = new Stopwatch();
             timer.Start();
@@ -558,22 +634,28 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 if (node == null)
                     continue;
 
-                int processed = 0;
-                if (mapCache.TryGetValue(node.Coordinate, out Node cachedNode))
-                    processed = RefreshCachedMapNode(node, cachedNode);
+                Node? cachedNode;
+                bool hasCachedNode;
+                lock (mapCacheLock)
+                    hasCachedNode = mapCache.TryGetValue(node.Coordinate, out cachedNode);
+
+                if (hasCachedNode && cachedNode != null)
+                    count += RefreshCachedMapNode(node, cachedNode);
                 else
-                    processed = CacheNewMapNode(node);
-
-                count += processed;
-
-                if (mapCache.TryGetValue(node.Coordinate, out Node justCached) && justCached != null)
-                    CacheMapConnections(justCached);
-
+                    count += CacheNewMapNode(node);
             }
+
+            List<Node> cachedNodes;
+            lock (mapCacheLock)
+                cachedNodes = mapCache.Values.ToList();
+
+            foreach (var cachedNodeToConnect in cachedNodes)
+                CacheMapConnections(cachedNodeToConnect, forwardPoints, reverseNeighbors);
+
             // stop timer
             timer.Stop();
             long time = timer.ElapsedMilliseconds;
-            float average = (float)time / count;
+            float average = count > 0 ? (float)time / count : 0;
             //LogMessage($"Map cache refreshed in {time}ms, {count} nodes processed, average time per node: {average:0.00}ms");
 
             RecalculateWeights();
@@ -612,46 +694,26 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private void RecalculateWeights() {
 
-        List<float> mapNodes;
-
+        // Snapshot under the lock; the background refresh job mutates mapCache concurrently.
+        List<float> weights;
         lock (mapCacheLock)
-        {
-            if (mapCache.Count == 0)
-            {
-                averageMapWeight = 0f;
-                maxMapWeight = 1f;
-                minMapWeight = 0f;
-                return;
-            }
+            weights = mapCache.Values.Where(x => !x.IsVisited).Select(x => x.Weight).Distinct().ToList();
 
-            mapNodes = mapCache.Values.Where(x => !x.IsVisited).Select(x => x.Weight).ToList();
-        }
-
-        if (mapNodes.Count == 0)
-        {
-            averageMapWeight = 0f;
-            maxMapWeight = 1f;
+        if (weights.Count == 0) {
             minMapWeight = 0f;
+            maxMapWeight = 1f;
             return;
         }
 
-        averageMapWeight = mapNodes.Average();
+        // Single ascending sort, then index both ends (was two separate OrderBy passes).
+        // Clip outliers for color normalization: 6th-smallest and 11th-largest when enough samples.
+        weights.Sort();
+        int n = weights.Count;
+        minMapWeight = n > 5 ? weights[5] : weights[0];
+        maxMapWeight = n > 10 ? weights[n - 11] : weights[n - 1];
 
-        // Robust percentile-based bounds (5th and 95th percentiles) to avoid outliers and empty sequences
-        var sorted = mapNodes.OrderBy(x => x).ToList();
-        int count = sorted.Count;
-        int lowerIndex = Math.Clamp((int)Math.Floor(0.05 * (count - 1)), 0, count - 1);
-        int upperIndex = Math.Clamp((int)Math.Ceiling(0.95 * (count - 1)), 0, count - 1);
-
-        minMapWeight = sorted[lowerIndex];
-        maxMapWeight = sorted[upperIndex];
-
-        // Ensure a non-zero, sane range
         if (maxMapWeight <= minMapWeight)
-        {
-            // Expand slightly to prevent division by zero downstream
             maxMapWeight = minMapWeight + 1f;
-        }
     }
 
     private Map ResolveMapType(AtlasNodeDescription node)
@@ -748,73 +810,6 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         node.Content.TryAdd(content.Name, content);
     }
 
-    private Mod ResolveMapMod(long modId)
-    {
-        string key = modId.ToString();
-        Settings.MapMods.MapModTypes ??= [];
-
-        if (Settings.MapMods.MapModTypes.TryGetValue(key, out Mod knownMod))
-            return knownMod;
-
-        Mod unknownMod = new()
-        {
-            ModID = $"UnknownTowerMod_{key}",
-            Name = $"Unknown Tower Mod {key}",
-            Description = $"Unknown tower mod {key}: $",
-            Stat2 = string.Empty,
-            Weight = 0.0f,
-            MinValue1 = 0.0f,
-            MaxValue1 = 0.0f,
-            MinValue2 = 0.0f,
-            MaxValue2 = 0.0f,
-            MinValueToShow = 0.0f,
-            ShowOnMap = false,
-            Color = UnknownModColor
-        };
-
-        Settings.MapMods.MapModTypes.TryAdd(key, unknownMod);
-        LogUnknownOnce(loggedUnknownMods, key, $"Discovered unknown tower mod id: {key}");
-
-        return Settings.MapMods.MapModTypes.TryGetValue(key, out knownMod) ? knownMod : unknownMod;
-    }
-
-    private void AddTowerEffectsToNode(AtlasNodeDescription node, Node targetNode)
-    {
-        foreach (var source in AtlasPanel.EffectSources.Where(x => Vector2.Distance(x.Coordinate, node.Coordinate) <= 11).ToList())
-        {
-            foreach (var effect in source.Effects.Where(x => x.Value != 0).ToList())
-            {
-                string effectKey = effect.ModId.ToString();
-                Mod mod = ResolveMapMod(effect.ModId);
-                string requiredContent = mod.RequiredContent ?? string.Empty;
-
-                if (targetNode.Effects.TryGetValue(effectKey, out Effect? existingEffect))
-                {
-                    if (!targetNode.IsTower || !targetNode.IsVisited)
-                        existingEffect.Value1 += effect.Value;
-
-                    existingEffect.Sources.Add(source.Coordinate);
-                    continue;
-                }
-
-                Effect newEffect = new()
-                {
-                    Name = mod.Name,
-                    Description = mod.Description,
-                    Value1 = effect.Value,
-                    ID = effect.ModId,
-                    Enabled = mod.ShowOnMap &&
-                                !(Settings.MapMods.OnlyDrawApplicableMods &&
-                                  !string.IsNullOrEmpty(requiredContent) &&
-                                  (targetNode.Content == null || !targetNode.Content.Any(x => x.Value.Name.Contains(requiredContent)))),
-                    Sources = [source.Coordinate]
-                };
-
-                targetNode.Effects.TryAdd(effectKey, newEffect);
-            }
-        }
-    }
-
     private void LogUnknownOnce(HashSet<string> seen, string key, string message)
     {
         if (!Settings.Features.DebugMode || string.IsNullOrWhiteSpace(key))
@@ -878,13 +873,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             }
         }
     
-        if (!newNode.IsVisited || newNode.IsTower) {
-            try {
-                AddTowerEffectsToNode(node, newNode);
-            } catch (Exception e) {
-                LogError($"Error getting Tower Effects for map {newNode.Coordinates}: " + e.Message);
-            }
-        }
+        // Tower tablet mods have been removed from the game, so effect scanning is disabled.
+        // Effects stays empty; weight/rendering/waypoint code handle the empty case.
         newNode.RecalculateWeight();
 
         lock (mapCacheLock)        
@@ -919,59 +909,57 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         var nodeContent = node.Element?.Content;
         if (nodeContent != null)
-            foreach(var content in nodeContent.Where(x => !string.IsNullOrWhiteSpace(x.Name)))           
-            {
+            foreach(var content in nodeContent.Where(x => !string.IsNullOrWhiteSpace(x.Name) && !x.Name.Contains("???"))) {
                 AddContentToNode(cachedNode, content.Name);
             }
 
-        try {
-            cachedNode.Effects.Clear();
-            AddTowerEffectsToNode(node, cachedNode);
-        } catch (Exception e) {
-            LogError($"Error getting Tower Effects for map {cachedNode.Coordinates}: " + e.Message);
-        }
+        // Tower tablet mods have been removed from the game, so effect scanning is disabled.
+        cachedNode.Effects.Clear();
 
-        cachedNode.RecalculateWeight();
+        if (Settings.Features.RecalculateNodeWeightsOnRefresh)
+            cachedNode.RecalculateWeight();
         return 1;
     } 
     
-    private void CacheMapConnections(Node cachedNode) {
-        
+    private void CacheMapConnections(Node cachedNode,
+        Dictionary<Vector2i, (Vector2i, Vector2i, Vector2i, Vector2i)> forwardPoints,
+        Dictionary<Vector2i, List<Vector2i>> reverseNeighbors) {
+
         if (cachedNode == null)
             return;
 
-        // Ensure dictionary exists and rebuild deterministically to avoid stale/null entries
-        cachedNode.Neighbors ??= new Dictionary<Vector2i, Node>();
+        cachedNode.Neighbors ??= [];
         cachedNode.Neighbors.Clear();
 
-        // Defensive read of atlas points
-        var connectionPoints = AtlasPanel.Points.FirstOrDefault(x => x.Item1 == cachedNode.Coordinates);
-        bool noPoints = connectionPoints.Item1 == default && connectionPoints.Item2 == default && connectionPoints.Item3 == default && connectionPoints.Item4 == default && connectionPoints.Item5 == default;
-        if (noPoints)
-            return;
-
-        cachedNode.NeighborCoordinates = (connectionPoints.Item2, connectionPoints.Item3, connectionPoints.Item4, connectionPoints.Item5);
-        var neighborCoordinates = new[] { connectionPoints.Item2, connectionPoints.Item3, connectionPoints.Item4, connectionPoints.Item5 };
-
-        // Safely read from mapCache with lock to avoid races while refreshing
-        lock (mapCacheLock) {
-            foreach (Vector2i vector in neighborCoordinates) {
-                if (vector == default || vector.Equals(cachedNode.Coordinates))
-                    continue;
-                if (mapCache.TryGetValue(vector, out Node neighborNode) && neighborNode != null && neighborNode.Coordinates != default)
-                    cachedNode.Neighbors[vector] = neighborNode;
-            }
-
-            // Get connections from other nodes to this node
-            var neighborConnections = AtlasPanel.Points.Where(x => x.Item2 == cachedNode.Coordinates || x.Item3 == cachedNode.Coordinates || x.Item4 == cachedNode.Coordinates || x.Item5 == cachedNode.Coordinates).ToList();
-            foreach (var point in neighborConnections) {
-                if (point.Item1 == default)
-                    continue;
-                if (mapCache.TryGetValue(point.Item1, out Node neighborNode) && neighborNode != null && neighborNode.Coordinates != default)
-                    cachedNode.Neighbors[point.Item1] = neighborNode;
-            }
+        // Forward connections: this node's own neighbor coordinates.
+        bool hasForwardPoints = false;
+        if (forwardPoints.TryGetValue(cachedNode.Coordinates, out var connectionPoints)) {
+            hasForwardPoints = true;
+            cachedNode.NeighborCoordinates = connectionPoints;
         }
-        
+
+        lock (mapCacheLock) {
+            if (hasForwardPoints) {
+                foreach (Vector2i vector in new[] { connectionPoints.Item1, connectionPoints.Item2, connectionPoints.Item3, connectionPoints.Item4 }) {
+                    if (vector == default || vector.Equals(cachedNode.Coordinates))
+                        continue;
+
+                    if (mapCache.TryGetValue(vector, out var neighborNode) && neighborNode != null && neighborNode.Coordinates != default)
+                        cachedNode.Neighbors[vector] = neighborNode;
+                }
+            }
+
+            // Reverse connections: other nodes that point at this node.
+            if (reverseNeighbors.TryGetValue(cachedNode.Coordinates, out var sources))
+                foreach (var source in sources) {
+                    if (source == default || source.Equals(cachedNode.Coordinates))
+                        continue;
+
+                    if (mapCache.TryGetValue(source, out var neighborNode) && neighborNode != null && neighborNode.Coordinates != default)
+                        cachedNode.Neighbors[source] = neighborNode;
+                }
+        }
+
     }
     private void AddNodeContentTypesFromTextures(AtlasNodeDescription node, Node toNode) {
 
@@ -1000,6 +988,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         catch (Exception) {
             // swallow; missing children are expected sometimes
         }
+
+                if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("ContentMapBoss.dds")))
+            if (Settings.MapContent.ContentTypes.TryGetValue("Map Boss", out Content mapBoss))
+                toNode.Content.TryAdd(mapBoss.Name, mapBoss);
 
     }
     private void AddNodeContentTowers(AtlasNodeDescription node, Node toNode) {
@@ -1120,19 +1112,18 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         Vector2 position = Vector2.Lerp(screenCenter, nodeCurrentPosition.Center, Settings.Graphics.LabelInterpolationScale);
         // Clamp position to screen
-        var minX = Graphics.MeasureText($"{cachedNode.Name} ({distance:0})").X;
-        var minY = Graphics.MeasureText($"{cachedNode.Name} ({distance:0})").Y;
-        var maxX = GameController.Window.GetWindowRectangle().Width - Graphics.MeasureText($"{cachedNode.Name} ({distance:0})").X;
-        var maxY = GameController.Window.GetWindowRectangle().Height - Graphics.MeasureText($"{cachedNode.Name} ({distance:0})").Y;
+        string label = $"{cachedNode.Name} ({distance:0})";
+        Vector2 labelSize = Graphics.MeasureText(label);
+        var windowRect = GameController.Window.GetWindowRectangle();
         // Clamp
-        position.X = Math.Clamp(position.X, minX, maxX);
-        position.Y = Math.Clamp(position.Y, minY, maxY);
+        position.X = Math.Clamp(position.X, labelSize.X, windowRect.Width - labelSize.X);
+        position.Y = Math.Clamp(position.Y, labelSize.Y, windowRect.Height - labelSize.Y);
 
         Graphics.DrawLine(position, nodeCurrentPosition.Center, Settings.Graphics.MapLineWidth, cachedNode.MapType.NodeColor);
 
         if (Settings.Features.DrawLineLabels) {
-            DrawCenteredTextWithBackground( $"{cachedNode.Name} ({Vector2.Distance(screenCenter, nodeCurrentPosition.Center):0})", position, cachedNode.MapType.NameColor, Settings.Graphics.BackgroundColor, true, 10, 4);
-        }  
+            DrawCenteredTextWithBackground(label, position, cachedNode.MapType.NameColor, Settings.Graphics.BackgroundColor, true, 10, 4);
+        }
             
         
     }
@@ -1208,8 +1199,6 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
                 if (effects.Count == 0 && cachedNode.IsVisited)
                 {
-                    DrawCenteredTextWithBackground("MISSING TABLET", nodeCurrentPosition.Center + new Vector2(0, Settings.MapMods.MapModOffset), Color.Red, Settings.Graphics.BackgroundColor, true, 10, 4);
-
                     if (Settings.Features.MissingTabletTowerContentRing)
                     {
                         cachedNode.Content.TryGetValue("Tower", out Content cachedContent);
@@ -1237,7 +1226,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             
         }
         mods = mods.OrderBy(x => x.Value.ToString()).ToDictionary(x => x.Key, x => x.Value);
-        DrawMapModText(mods, cachedNode.MapNode.Element.GetClientRect().Center);
+        DrawMapModText(mods, nodeCurrentPosition.Center);
     }
     private void DrawMapModText(Dictionary<string, Color> mods, Vector2 position)
     {      
@@ -1494,35 +1483,52 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
     #region Helper Functions
 
+    // Map tooltip can live under WorldMap child 13 or 14; checked in IsOnScreen.
+    private static readonly int[] TooltipChildIndices = { 13, 14 };
+
+    // Recomputes the on-screen rect and any visible map-tooltip rects once per render frame.
+    // IsOnScreen then reads these cached values instead of re-reading panel/tooltip game memory
+    // on every call (it's called dozens of times per node per frame).
+    private void UpdateScreenBounds()
+    {
+        try {
+            var size = GameController.Window.GetWindowRectangleTimeCache.Size;
+            float left = 0;
+            float right = size.X;
+
+            if (UI.OpenRightPanel.IsVisible)
+                right -= UI.OpenRightPanel.GetClientRect().Width;
+
+            if (UI.OpenLeftPanel.IsVisible || WaypointPanelIsOpen)
+                left += Math.Max(UI.OpenLeftPanel.GetClientRect().Width, UI.SettingsPanel.GetClientRect().Width);
+
+            cachedScreenRect = new RectangleF(left, 0, right - left, size.Y);
+
+            // Don't render over the map tooltip. It can live under child 13 or 14;
+            // child 14 doesn't always exist, so each lookup is null-guarded.
+            cachedTooltipRects.Clear();
+            foreach (var tooltipIndex in TooltipChildIndices) {
+                var tooltip = UI.WorldMap.GetChildAtIndex(tooltipIndex);
+                if (tooltip == null || !tooltip.IsVisible)
+                    continue;
+
+                RectangleF mapTooltip = tooltip.GetClientRect();
+                mapTooltip.Inflate(mapTooltip.Width * 0.1f, mapTooltip.Height * 0.1f);
+                cachedTooltipRects.Add(mapTooltip);
+            }
+        } catch (Exception e) {
+            // Keep last good bounds on a failed memory read rather than blanking the overlay.
+            LogError("Error updating screen bounds: " + e.Message);
+        }
+    }
+
     private bool IsOnScreen(Vector2 position)
     {
-        var screen = new RectangleF
-        {
-            X = 0,
-            Y = 0,
-            Width = GameController.Window.GetWindowRectangleTimeCache.Size.X,
-            Height = GameController.Window.GetWindowRectangleTimeCache.Size.Y
-        };
-
-        var left = screen.Left;
-        var right = screen.Right;
-
-        if (UI.OpenRightPanel.IsVisible)
-            right -= UI.OpenRightPanel.GetClientRect().Width;
-
-        if (UI.OpenLeftPanel.IsVisible || WaypointPanelIsOpen)
-            left += Math.Max(UI.OpenLeftPanel.GetClientRect().Width, UI.SettingsPanel.GetClientRect().Width);
-
-        RectangleF screenRect = new RectangleF(left, screen.Top, right - left, screen.Height);
-        if (UI.WorldMap.GetChildAtIndex(9).IsVisible) {
-            RectangleF mapTooltip = UI.WorldMap.GetChildAtIndex(9).GetClientRect();                
-            mapTooltip.Inflate(mapTooltip.Width * 0.1f, mapTooltip.Height * 0.1f);
-
-            if (mapTooltip.Contains(position))
+        foreach (var tooltip in cachedTooltipRects)
+            if (tooltip.Contains(position))
                 return false;
-        }
-        
-        return screenRect.Contains(position);
+
+        return cachedScreenRect.Contains(position);
     }
 
     public float GetDistanceToNode(Node cachedNode)
@@ -1906,16 +1912,21 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     #region Waypoint Functions
     private void DrawWaypoint(Waypoint waypoint) {
-        if (!Settings.Waypoints.ShowWaypoints || waypoint.MapNode() == null || !waypoint.Show || !IsOnScreen(waypoint.MapNode().Element.GetClientRect().Center))
+        var mapNode = waypoint.MapNode();
+        if (!Settings.Waypoints.ShowWaypoints || mapNode == null || !waypoint.Show)
             return;
 
-        Vector2 waypointSize = new Vector2(48, 48);        
+        RectangleF nodeRect = mapNode.Element.GetClientRect();
+        if (!IsOnScreen(nodeRect.Center))
+            return;
+
+        Vector2 waypointSize = new Vector2(48, 48);
         waypointSize *= waypoint.Scale;
 
-        Vector2 iconPosition = waypoint.MapNode().Element.GetClientRect().Center - new Vector2(0, waypoint.MapNode().Element.GetClientRect().Height / 2);
+        Vector2 iconPosition = nodeRect.Center - new Vector2(0, nodeRect.Height / 2);
 
-        if (waypoint.MapNode().Element.GetChildAtIndex(0) != null)
-            iconPosition -= new Vector2(0, waypoint.MapNode().Element.GetChildAtIndex(0).GetClientRect().Height);
+        if (mapNode.Element.GetChildAtIndex(0) != null)
+            iconPosition -= new Vector2(0, mapNode.Element.GetChildAtIndex(0).GetClientRect().Height);
 
         iconPosition -= new Vector2(0, 20);
         Vector2 waypointTextPosition = iconPosition - new Vector2(0, 10);
@@ -1963,10 +1974,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
 
     private void DrawWaypointArrow(Waypoint waypoint) {
-        if (!Settings.Waypoints.ShowWaypointArrows || waypoint.MapNode() == null)
+        var mapNode = waypoint.MapNode();
+        if (!Settings.Waypoints.ShowWaypointArrows || mapNode == null)
             return;
 
-        Vector2 waypointPosition = waypoint.MapNode().Element.GetClientRect().Center;
+        Vector2 waypointPosition = mapNode.Element.GetClientRect().Center;
 
         float distance = Vector2.Distance(screenCenter, waypointPosition);
 
@@ -1985,10 +1997,16 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         Color color = Color.FromArgb(255, waypoint.Color);
         DrawRotatedImage(arrowId, arrowPosition, arrowSize, phi, color);
-
-        Vector2 textPosition = arrowPosition + new Vector2(arrowSize.X / 2, arrowSize.Y / 2);
+         Vector2 textPosition = arrowPosition + new Vector2(arrowSize.X / 2, arrowSize.Y / 2);
         textPosition = Vector2.Lerp(textPosition, screenCenter, 0.10f);
-        DrawCenteredTextWithBackground($"{waypoint.Name} ({distance:0})", textPosition, color, Settings.Graphics.BackgroundColor, true, 10, 4);
+        if (Settings.Waypoints.InverWaypointArrowsColors)
+        {
+            DrawCenteredTextWithBackground($"{waypoint.Name} ({waypoint.StepCount:0})", textPosition,  Settings.Graphics.BackgroundColor, color, true, 10, 4);
+        }
+        else
+        {
+            DrawCenteredTextWithBackground($"{waypoint.Name} ({waypoint.StepCount:0})", textPosition, color, Settings.Graphics.BackgroundColor, true, 10, 4);
+        }
     }
 
     #endregion
