@@ -31,7 +31,7 @@ public class Node
     [JsonIgnore]
     public bool IsTower => MapType.IsTower();
     [JsonIgnore]
-    public (Vector2i, Vector2i, Vector2i, Vector2i) NeighborCoordinates { get; set; } 
+    public List<Vector2i> NeighborCoordinates { get; set; } = [];
     [JsonIgnore]
     public Vector2i Coordinates { get; set; }
     [JsonIgnore]
@@ -105,7 +105,7 @@ public class Node
         sb.AppendLine($"IsWaypoint: {IsWaypoint}");
         sb.AppendLine($"Coordinate: {Coordinates}");
         sb.AppendLine($"Weight: {Weight}");
-        sb.AppendLine($"Neighbors: {NeighborCoordinates.Item1}, {NeighborCoordinates.Item2}, {NeighborCoordinates.Item3}, {NeighborCoordinates.Item4}");
+        sb.AppendLine($"Neighbors: {string.Join(", ", NeighborCoordinates)}");
         sb.AppendLine($"Biomes: {string.Join(", ", Biomes.Where(x => x.Value != null).Select(x => x.Value.Name))}");
         sb.AppendLine($"Content: {string.Join(", ", Content.Select(x => x.Value.Name))}");
         sb.AppendLine($"Effects: {string.Join(", ", Effects.Select(x => x.Value.ToString()))}");
@@ -140,6 +140,6 @@ public class Node
     }
 
     public List<Vector2i> GetNeighborCoordinates() {
-        return [NeighborCoordinates.Item1, NeighborCoordinates.Item2, NeighborCoordinates.Item3, NeighborCoordinates.Item4];
+        return NeighborCoordinates;
     }
 }

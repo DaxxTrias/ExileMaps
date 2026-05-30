@@ -440,6 +440,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Abyss");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Map Boss");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Anomaly Map Boss");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Powerful Map Boss");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Cleansed");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted Nexus");
@@ -586,16 +587,16 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         // scanning AtlasPanel.Points twice per node (previously O(N^2) over the whole atlas, with a
         // fresh game-memory read on every scan).
         var points = AtlasPanel.Points.ToList();
-        var forwardPoints = new Dictionary<Vector2i, (Vector2i, Vector2i, Vector2i, Vector2i)>(points.Count);
+        var forwardPoints = new Dictionary<Vector2i, List<Vector2i>>(points.Count);
         var reverseNeighbors = new Dictionary<Vector2i, List<Vector2i>>(points.Count);
         foreach (var point in points) {
-            forwardPoints[point.Item1] = (point.Item2, point.Item3, point.Item4, point.Item5);
-            foreach (var neighbor in new[] { point.Item2, point.Item3, point.Item4, point.Item5 }) {
+            forwardPoints[point.Source] = point.Targets;
+            foreach (var neighbor in point.Targets) {
                 if (neighbor == default)
                     continue;
                 if (!reverseNeighbors.TryGetValue(neighbor, out var sources))
                     reverseNeighbors[neighbor] = sources = new List<Vector2i>();
-                sources.Add(point.Item1);
+                sources.Add(point.Source);
             }
         }
 
@@ -700,10 +701,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 AddNodeContentTypesFromTextures(node, newNode);
                 AddNodeContentTowers(node, newNode);
 
-                if (node.Element.Content != null)  
-                    foreach(var content in node.Element.Content.Where(x => x.Name != "").AsParallel().ToList())        
-                        if (Settings.MapContent.ContentTypes.TryGetValue(content.Name, out Content newContent))
-                            newNode.Content.TryAdd(newContent.Name, newContent);
+                AddNodeContentFromIdentity(node, newNode);
 
             } catch (Exception e) {
                 LogError($"Error getting Content for map type {node.Address.ToString("X")}: " + e.Message);
@@ -751,19 +749,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         AddNodeContentTypesFromTextures(node, cachedNode);
         AddNodeContentTowers(node, cachedNode);
 
-        if (node.Element.Content != null)
-            foreach (var content in node.Element.Content.Where(x => x.Name != "" && !x.Name.Contains("???"))) {
-                var contentName = content.Name;
-                if (Settings.MapContent.ContentTypes.TryGetValue(contentName, out var contentType))
-                {
-                    cachedNode.Content.TryAdd(contentName, contentType);
-                }
-                else
-                {
-                    LogMessage($"ContentType not found for: {contentName} on the map {shortID} at the place {node.Element.GetChildAtIndex(0).X} : {node.Element.GetChildAtIndex(0).Y}'");
-                    // Handle the missing key case
-                }
-            }
+        AddNodeContentFromIdentity(node, cachedNode);
 
         // Tower tablet mods have been removed from the game, so effect scanning is disabled.
         cachedNode.Effects.Clear();
@@ -774,16 +760,16 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     } 
     
     private void CacheMapConnections(Node cachedNode,
-        Dictionary<Vector2i, (Vector2i, Vector2i, Vector2i, Vector2i)> forwardPoints,
+        Dictionary<Vector2i, List<Vector2i>> forwardPoints,
         Dictionary<Vector2i, List<Vector2i>> reverseNeighbors) {
-
-        if (cachedNode.Neighbors.Where(x => x.Value.Coordinates != default).Count() == 4)
-            return;
 
         // Forward connections: this node's own neighbor coordinates.
         if (forwardPoints.TryGetValue(cachedNode.Coordinates, out var connectionPoints)) {
+            if (cachedNode.Neighbors.Count(x => x.Value.Coordinates != default) >= connectionPoints.Count(v => v != default))
+                return;
+
             cachedNode.NeighborCoordinates = connectionPoints;
-            foreach (Vector2i vector in new[] { connectionPoints.Item1, connectionPoints.Item2, connectionPoints.Item3, connectionPoints.Item4 })
+            foreach (Vector2i vector in connectionPoints)
                 if (mapCache.TryGetValue(vector, out Node neighborNode))
                     cachedNode.Neighbors.TryAdd(vector, neighborNode);
         }
@@ -822,6 +808,30 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 toNode.Content.TryAdd(mapBoss.Name, mapBoss);
 
     }
+
+    // Named content used to live on AtlasPanelNode.Content; it is now exposed via
+    // AtlasPanelNode.ContentIdentity, a list whose elements carry an .Id (e.g. "PowerfulMapBoss").
+    // The Id is space-stripped, while ContentTypes keys/names have spaces ("Powerful Map Boss"),
+    // so match by stripping spaces from the key.
+    private void AddNodeContentFromIdentity(AtlasNodeDescription node, Node toNode) {
+        var contentIdentity = node.Element?.ContentIdentity;
+        if (contentIdentity == null)
+            return;
+
+        foreach (var content in contentIdentity) {
+            var id = content?.Id;
+            if (string.IsNullOrEmpty(id))
+                continue;
+
+            var contentType = Settings.MapContent.ContentTypes.TryGetValue(id, out var direct)
+                ? direct
+                : Settings.MapContent.ContentTypes.FirstOrDefault(x => x.Key.Replace(" ", "") == id).Value;
+
+            if (contentType != null)
+                toNode.Content.TryAdd(contentType.Name, contentType);
+        }
+    }
+
     private void AddNodeContentTowers(AtlasNodeDescription node, Node toNode) {
         var aux = (node.Element.Height == 110); // tower height is 110
         if (aux)
