@@ -82,5 +82,9 @@ namespace ExileMaps.Classes
                 }
             }
         }
+
+        // Atlas icon path scraped from EndgameMapContentVisualIdentity. Stored for later rendering;
+        // not drawn yet.
+        public string AtlasIcon { get; set; }
     }
 }

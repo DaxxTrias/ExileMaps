@@ -114,6 +114,12 @@ public class HotkeySettings
 
     [Menu("Update Map Type Data")]
     public HotkeyNode UpdateMapsKey { get; set; } = new HotkeyNode(Keys.F13);
+
+    [Menu("Update Content Type Data")]
+    public HotkeyNode UpdateContentKey { get; set; } = new HotkeyNode(Keys.F13);
+
+    [Menu("Update Biome Data")]
+    public HotkeyNode UpdateBiomesKey { get; set; } = new HotkeyNode(Keys.F13);
 }
 
 [Submenu(CollapsedByDefault = true)]
@@ -314,19 +320,21 @@ public class MapSettings
             if (ImGui.BeginTable("maps_table", 7, ImGuiTableFlags.SizingFixedFit|ImGuiTableFlags.Borders|ImGuiTableFlags.PadOuterX))
             {
 
-                ImGui.TableSetupColumn("Map", ImGuiTableColumnFlags.WidthFixed, 250);                                                              
-                ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 100); 
-                ImGui.TableSetupColumn("Node", ImGuiTableColumnFlags.WidthFixed, 30);     
-                ImGui.TableSetupColumn("Text", ImGuiTableColumnFlags.WidthFixed, 30);               
+                ImGui.TableSetupColumn("Map", ImGuiTableColumnFlags.WidthFixed, 250);
+                ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 100);
+                ImGui.TableSetupColumn("Node", ImGuiTableColumnFlags.WidthFixed, 30);
+                ImGui.TableSetupColumn("Text", ImGuiTableColumnFlags.WidthFixed, 30);
                 ImGui.TableSetupColumn("Text BG", ImGuiTableColumnFlags.WidthFixed, 30);
-                ImGui.TableSetupColumn("Line", ImGuiTableColumnFlags.WidthFixed, 30);                              
-                ImGui.TableSetupColumn("Biomes", ImGuiTableColumnFlags.WidthStretch, 200);   
+                ImGui.TableSetupColumn("Line", ImGuiTableColumnFlags.WidthFixed, 30);
+                ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch, 200);
                 ImGui.TableHeadersRow();
-                
-                if (Maps.Count == 0)   
+
+                if (Maps.Count == 0)
                     Main.LoadDefaultMaps();
-                
-                foreach (var (key,map) in Maps.OrderBy(x => x.Value.Name))
+
+                foreach (var (key,map) in Maps
+                    .Where(x => !MapIsUnused(x.Key, x.Value))
+                    .OrderBy(x => x.Value.Name))
                 {
                     ImGui.PushID($"Map_{key}");
                     ImGui.TableNextRow();
@@ -375,11 +383,10 @@ public class MapSettings
                     SettingsHelpers.CenterControl(30f);
                     bool drawLine = map.DrawLine;
                     if(ImGui.Checkbox($"##{key}_line", ref drawLine))
-                        map.DrawLine = drawLine;    
-                    
-                    // Biomes
+                        map.DrawLine = drawLine;
+
+                    // Blank spacer column (was Biomes) so the fixed-width columns stay aligned.
                     ImGui.TableNextColumn();
-                    ImGui.Text(map.BiomesToString() ?? "None");
 
                     ImGui.PopID();
                 }                
@@ -388,6 +395,16 @@ public class MapSettings
             }
         };
 
+    }
+
+    // Maps flagged DNT-UNUSED (in the name, key or any id) are dev/unused placeholders and are hidden.
+    private static bool MapIsUnused(string key, Map map) {
+        const string marker = "DNT-UNUSED";
+        if (key != null && key.Contains(marker))
+            return true;
+        if (map.Name != null && map.Name.Contains(marker))
+            return true;
+        return map.IDs != null && map.IDs.Any(id => id != null && id.Contains(marker));
     }
 
     [JsonIgnore]
@@ -578,7 +595,7 @@ public class ContentSettings
                         ImGui.TableNextRow();
 
                         ImGui.TableNextColumn();
-                        ImGui.Text(key);
+                        ImGui.Text(content.Name);
 
                         ImGui.TableNextColumn();
                         float weight = content.Weight;                        

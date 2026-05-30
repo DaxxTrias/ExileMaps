@@ -62,6 +62,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     internal IntPtr arrowId;
 
     private bool AtlasHasBeenClosed = true;
+    private bool gameFilesScraped = false;
     private bool WaypointPanelIsOpen = false;
     private bool ShowMinimap = false;
 
@@ -110,6 +111,15 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
 
         AtlasHasBeenClosed = false;
+
+        // Scrape map types, content types and biomes from the game's endgame files once they're
+        // available (files may not be loaded yet at Initialise). Adds anything missing from the json
+        // seeds without overwriting them. All three load together, so gate on the map scrape succeeding.
+        if (!gameFilesScraped && UpdateMapData(false)) {
+            UpdateContentData(false);
+            UpdateBiomeData(false);
+            gameFilesScraped = true;
+        }
 
         cacheTicks++;
         if (cacheTicks % 100 != 0) 
@@ -269,6 +279,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RegisterHotkey(Settings.Keybinds.DeleteWaypointHotkey);
         RegisterHotkey(Settings.Keybinds.ShowTowerRangeHotkey);
         RegisterHotkey(Settings.Keybinds.UpdateMapsKey);
+        RegisterHotkey(Settings.Keybinds.UpdateContentKey);
+        RegisterHotkey(Settings.Keybinds.UpdateBiomesKey);
         RegisterHotkey(Settings.Keybinds.ToggleLockedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleUnlockedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleVisitedNodesHotkey);
@@ -291,8 +303,14 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (Settings.Keybinds.DebugKey.PressedOnce())        
             DoDebugging();
 
-        if (Settings.Keybinds.UpdateMapsKey.PressedOnce())        
+        if (Settings.Keybinds.UpdateMapsKey.PressedOnce())
             UpdateMapData();
+
+        if (Settings.Keybinds.UpdateContentKey.PressedOnce())
+            UpdateContentData();
+
+        if (Settings.Keybinds.UpdateBiomesKey.PressedOnce())
+            UpdateBiomeData();
 
         if (Settings.Keybinds.ToggleWaypointPanelHotkey.PressedOnce()) {  
             WaypointPanelIsOpen = !WaypointPanelIsOpen;
@@ -396,8 +414,31 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     Settings.MapTypes.Maps.TryAdd(key, map);
                 }
             }
+
+            MergeDuplicateMapsByName();
         } catch (Exception e) {
             LogError("Error loading default maps: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    // Collapses map-type entries that share a display Name into a single entry, merging their ids and
+    // removing the redundant rows. Different ids can share a Name (e.g. the "Precursor Tower" towers),
+    // and json seeding can leave several such rows; node matching uses MatchID(IDs), so the union of ids
+    // on the kept entry preserves matching.
+    private void MergeDuplicateMapsByName() {
+        var dupeGroups = Settings.MapTypes.Maps
+            .GroupBy(kv => kv.Value.Name)
+            .Where(g => g.Count() > 1)
+            .ToList();
+
+        foreach (var group in dupeGroups) {
+            var keep = group.First().Value;
+            keep.IDs = group.SelectMany(kv => kv.Value.IDs ?? []).Distinct().ToArray();
+            if (string.IsNullOrEmpty(keep.ShortestId))
+                keep.ShortestId = keep.IDs.OrderBy(x => x.Length).FirstOrDefault();
+
+            foreach (var dup in group.Skip(1))
+                Settings.MapTypes.Maps.Remove(dup.Key);
         }
     }
 
@@ -477,36 +518,175 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     }
 
-    private void UpdateMapData() {
-        var uniqueMapNames = AtlasPanel.Descriptions.Select(x => x.Element.Area.Name).Distinct().ToList();
+    // Map types are scraped from the game's endgame map file list (GameController.Files.EndgameMaps)
+    // rather than the live atlas, so the full set is known without visiting/seeing nodes. The json seed
+    // (LoadDefaultMaps) still supplies curated Weight/Color/Highlight/Biomes for existing types; this
+    // only adds missing types and refreshes their IDs. Returns false if the file list isn't loaded yet
+    // (e.g. called before the game finishes loading files) so the caller can retry.
+    private bool UpdateMapData(bool writeToFile = true) {
+      try {
+        // Collapse any entries that share a display Name into a single row (union of ids). Different map
+        // ids can legitimately share a Name (e.g. the various "Precursor Tower" towers); we show one row
+        // per Name. Node matching falls back to MatchID(IDs), so every merged id still resolves.
+        MergeDuplicateMapsByName();
 
-        // iterate through each name and find the ID for all mapes iwth that name
-        foreach (var name in uniqueMapNames) {
-            var maps = AtlasPanel.Descriptions.Where(x => x.Element.Area.Name == name).ToList();
-            var mapIds = maps.Select(x => x.Element.Area.Id).Distinct().ToList();
-            // get shortest item from list
-            var shortID = mapIds.OrderBy(x => x.Length).FirstOrDefault();
-            if (Settings.MapTypes.Maps.TryGetValue(name.Replace(" ", ""), out Map mapType) || Settings.MapTypes.Maps.TryGetValue(shortID, out mapType)) {        
-                Settings.MapTypes.Maps.Remove(name.Replace(" ", ""));                
-                Settings.MapTypes.Maps.TryAdd(shortID, mapType);
-                mapType.IDs = [.. mapIds];
+        var endgameMaps = GameController.Files.EndgameMaps?.EntriesList;
+        if (endgameMaps == null || endgameMaps.Count == 0)
+            return false;
+
+        int added = 0, updated = 0;
+        foreach (var endgameMap in endgameMaps) {
+            var area = endgameMap?.Area;
+            var id = area?.Id;
+            var name = area?.Name;
+            if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(name))
+                continue;
+
+            // Skip dev/unused placeholder maps.
+            if (id.Contains("DNT-UNUSED") || name.Contains("DNT-UNUSED"))
+                continue;
+
+            // Existing map-type matching strips the _NoBoss suffix to form the key (see CacheNewMapNode).
+            var shortID = id.Replace("_NoBoss", "");
+
+            // Merge identically-named maps into a single entry, collecting all their ids. The json seed
+            // and prior scrapes already store Name, so a Name match covers both. Node matching falls back
+            // to MatchID(IDs), so every merged id still resolves even though the entry has one key.
+            var mapType = Settings.MapTypes.Maps.Values.FirstOrDefault(m => m.Name == name);
+            if (mapType != null) {
+                if (!mapType.IDs.Contains(id))
+                    mapType.IDs = [.. mapType.IDs, id];
+                if (string.IsNullOrEmpty(mapType.ShortestId))
+                    mapType.ShortestId = shortID;
+                updated++;
+            } else if (Settings.MapTypes.Maps.TryGetValue(name.Replace(" ", ""), out mapType) || Settings.MapTypes.Maps.TryGetValue(shortID, out mapType)) {
+                // Migrate any legacy name-keyed entry to the id key and make sure this id is recorded.
+                Settings.MapTypes.Maps.Remove(name.Replace(" ", ""));
+                mapType.Name = name;
                 mapType.ShortestId = shortID;
-                LogMessage($"Updated Map Data for {shortID}");
+                if (!mapType.IDs.Contains(id))
+                    mapType.IDs = [.. mapType.IDs, id];
+                Settings.MapTypes.Maps.TryAdd(shortID, mapType);
+                updated++;
             } else {
-                var newMap = new Map { 
-                    Name = name, 
-                    IDs = [.. mapIds],
-                    ShortestId = shortID};
-        
-                Settings.MapTypes.Maps.TryAdd(shortID, newMap);        
-                LogMessage($"Added Map Data for {shortID}");    
+                Settings.MapTypes.Maps.TryAdd(shortID, new Map {
+                    Name = name,
+                    IDs = [id],
+                    ShortestId = shortID });
+                added++;
             }
         }
 
-        var json = JsonSerializer.Serialize(Settings.MapTypes.Maps, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(Path.Combine(DirectoryFullName, defaultMapsPath), json);
+        if (writeToFile) {
+            var json = JsonSerializer.Serialize(Settings.MapTypes.Maps, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(Path.Combine(DirectoryFullName, defaultMapsPath), json);
+        }
 
-        LogMessage("Updated Map Data");
+        LogMessage($"Updated Map Data from game files ({added} new, {updated} updated)");
+        return true;
+      } catch (Exception e) {
+        LogError("Error updating map data from game files: " + e.Message);
+        return false;
+      }
+    }
+
+    // Scans the whole atlas for content types (AtlasPanelNode.ContentIdentity[].Id) and adds any not
+    // already in the Content data source, then writes content.json. Content types come from the game's
+    // EndgameMapContent file list (Name + Id), with icons from EndgameMapContentVisualIdentity (matched
+    // by Id). New entries are keyed by Id; legacy entries keyed by the spaced Name are migrated to the
+    // Id key (deduped via space-stripped compare). Returns false if the file list isn't loaded yet.
+    private bool UpdateContentData(bool writeToFile = true) {
+      try {
+        var contentEntries = GameController.Files.EndgameMapContent?.EntriesList;
+        if (contentEntries == null || contentEntries.Count == 0)
+            return false;
+
+        // Build Id -> AtlasIcon lookup from the visual identity file list.
+        var iconLookup = new Dictionary<string, string>();
+        var visuals = GameController.Files.EndgameMapContentVisualIdentity?.EntriesList;
+        if (visuals != null)
+            foreach (var vi in visuals) {
+                var vid = vi?.Id;
+                if (!string.IsNullOrEmpty(vid))
+                    iconLookup[vid] = vi.AtlasIcon?.ToString();
+            }
+
+        int added = 0, updated = 0;
+        foreach (var entry in contentEntries) {
+            var id = entry?.Id;
+            var name = entry?.Name;
+            if (string.IsNullOrEmpty(id))
+                continue;
+            if (string.IsNullOrEmpty(name))
+                name = id;
+
+            iconLookup.TryGetValue(id, out var icon);
+
+            // Find an existing entry under the Id key or a legacy spaced-Name key.
+            var existingKey = Settings.MapContent.ContentTypes.Keys.FirstOrDefault(k => k == id || k.Replace(" ", "") == id);
+            if (existingKey != null) {
+                var existing = Settings.MapContent.ContentTypes[existingKey];
+                existing.Name = name;
+                if (!string.IsNullOrEmpty(icon))
+                    existing.AtlasIcon = icon;
+                if (existingKey != id) {
+                    Settings.MapContent.ContentTypes.Remove(existingKey);
+                    Settings.MapContent.ContentTypes.TryAdd(id, existing);
+                }
+                updated++;
+            } else if (Settings.MapContent.ContentTypes.TryAdd(id, new Content { Name = name, Weight = 0.0f, AtlasIcon = icon })) {
+                added++;
+                LogMessage($"Added Content Type: {id}");
+            }
+        }
+
+        if (writeToFile) {
+            var json = JsonSerializer.Serialize(Settings.MapContent.ContentTypes, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(Path.Combine(DirectoryFullName, defaultContentPath), json);
+        }
+
+        LogMessage($"Updated Content Data from game files ({added} new, {updated} updated)");
+        return true;
+      } catch (Exception e) {
+        LogError("Error updating content data from game files: " + e.Message);
+        return false;
+      }
+    }
+
+    // Biomes come from the game's EndgameMapBiomes file list (Id only). Keyed by Id, matching the
+    // existing biomes.json convention. Returns false if the file list isn't loaded yet.
+    private bool UpdateBiomeData(bool writeToFile = true) {
+      try {
+        var biomeEntries = GameController.Files.EndgameMapBiomes?.EntriesList;
+        if (biomeEntries == null || biomeEntries.Count == 0)
+            return false;
+
+        int added = 0;
+        foreach (var entry in biomeEntries) {
+            var id = entry?.Id;
+            if (string.IsNullOrEmpty(id))
+                continue;
+
+            if (Settings.Biomes.Biomes.ContainsKey(id))
+                continue;
+
+            if (Settings.Biomes.Biomes.TryAdd(id, new Biome { Name = id, Weight = 0.0f })) {
+                added++;
+                LogMessage($"Added Biome: {id}");
+            }
+        }
+
+        if (writeToFile) {
+            var json = JsonSerializer.Serialize(Settings.Biomes.Biomes, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(Path.Combine(DirectoryFullName, defaultBiomesPath), json);
+        }
+
+        LogMessage($"Updated Biome Data from game files ({added} new)");
+        return true;
+      } catch (Exception e) {
+        LogError("Error updating biome data from game files: " + e.Message);
+        return false;
+      }
     }
 
     #endregion
