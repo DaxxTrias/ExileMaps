@@ -38,6 +38,23 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private const string IconsFile = "Icons.png";
     private static readonly Color UnknownContentColor = Color.FromArgb(180, 180, 180, 180);
     private static readonly Color UnknownModColor = Color.FromArgb(180, 180, 180, 180);
+    private static readonly string[] ContentRingDrawOrder = [
+        "Breach",
+        "Delirium",
+        "Expedition",
+        "Ritual",
+        "Abyss",
+        "Map Boss",
+        "Anomaly Map Boss",
+        "Powerful Map Boss",
+        "Cleansed",
+        "Corrupted",
+        "Corrupted Nexus",
+        "Irradiated",
+        "Unique Map",
+        "Tower"
+    ];
+    private static readonly HashSet<string> ContentRingDrawOrderLookup = new(ContentRingDrawOrder, StringComparer.OrdinalIgnoreCase);
     
     public IngameUIElements UI;
     public AtlasPanel AtlasPanel;
@@ -608,21 +625,22 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             List<AtlasNodeDescription> atlasNodes = [.. AtlasPanel.Descriptions];
 
             // Snapshot connection points once and build O(1) forward + reverse lookups, instead of
-            // scanning AtlasPanel.Points twice per node.
+            // scanning AtlasPanel.Points twice per node (previously O(N^2) over the whole atlas, with a
+            // fresh game-memory read on every scan).
             var points = AtlasPanel.Points.ToList();
-            var forwardPoints = new Dictionary<Vector2i, (Vector2i, Vector2i, Vector2i, Vector2i)>(points.Count);
+            var forwardPoints = new Dictionary<Vector2i, List<Vector2i>>(points.Count);
             var reverseNeighbors = new Dictionary<Vector2i, List<Vector2i>>(points.Count);
             foreach (var point in points) {
-                forwardPoints[point.Item1] = (point.Item2, point.Item3, point.Item4, point.Item5);
+                forwardPoints[point.Source] = point.Targets;
 
-                foreach (var neighbor in new[] { point.Item2, point.Item3, point.Item4, point.Item5 }) {
+                foreach (var neighbor in point.Targets) {
                     if (neighbor == default)
                         continue;
 
                     if (!reverseNeighbors.TryGetValue(neighbor, out var sources))
                         reverseNeighbors[neighbor] = sources = [];
 
-                    sources.Add(point.Item1);
+                    sources.Add(point.Source);
                 }
             }
 
@@ -851,10 +869,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 AddNodeContentTypesFromTextures(node, newNode);
                 AddNodeContentTowers(node, newNode);
 
-                var nodeContent = node.Element?.Content;
-                if (nodeContent != null)  
-                    foreach(var content in nodeContent.Where(x => !string.IsNullOrWhiteSpace(x.Name)).ToList())        
-                        AddContentToNode(newNode, content.Name);
+                AddNodeContentFromIdentity(node, newNode);
 
             } catch (Exception e) {
                 LogError($"Error getting Content for map type {node.Address.ToString("X")}: " + e.Message);
@@ -907,11 +922,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         AddNodeContentTypesFromTextures(node, cachedNode);
         AddNodeContentTowers(node, cachedNode);
 
-        var nodeContent = node.Element?.Content;
-        if (nodeContent != null)
-            foreach(var content in nodeContent.Where(x => !string.IsNullOrWhiteSpace(x.Name) && !x.Name.Contains("???"))) {
-                AddContentToNode(cachedNode, content.Name);
-            }
+        AddNodeContentFromIdentity(node, cachedNode);
 
         // Tower tablet mods have been removed from the game, so effect scanning is disabled.
         cachedNode.Effects.Clear();
@@ -922,7 +933,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     } 
     
     private void CacheMapConnections(Node cachedNode,
-        Dictionary<Vector2i, (Vector2i, Vector2i, Vector2i, Vector2i)> forwardPoints,
+        Dictionary<Vector2i, List<Vector2i>> forwardPoints,
         Dictionary<Vector2i, List<Vector2i>> reverseNeighbors) {
 
         if (cachedNode == null)
@@ -932,15 +943,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         cachedNode.Neighbors.Clear();
 
         // Forward connections: this node's own neighbor coordinates.
-        bool hasForwardPoints = false;
-        if (forwardPoints.TryGetValue(cachedNode.Coordinates, out var connectionPoints)) {
-            hasForwardPoints = true;
-            cachedNode.NeighborCoordinates = connectionPoints;
-        }
+        var hasForwardPoints = forwardPoints.TryGetValue(cachedNode.Coordinates, out var connectionPoints);
+        cachedNode.NeighborCoordinates = hasForwardPoints && connectionPoints != null ? connectionPoints : [];
 
         lock (mapCacheLock) {
-            if (hasForwardPoints) {
-                foreach (Vector2i vector in new[] { connectionPoints.Item1, connectionPoints.Item2, connectionPoints.Item3, connectionPoints.Item4 }) {
+            if (hasForwardPoints && connectionPoints != null) {
+                foreach (Vector2i vector in connectionPoints) {
                     if (vector == default || vector.Equals(cachedNode.Coordinates))
                         continue;
 
@@ -994,6 +1002,30 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 toNode.Content.TryAdd(mapBoss.Name, mapBoss);
 
     }
+
+    // Named content used to live on AtlasPanelNode.Content; it is now exposed via
+    // AtlasPanelNode.ContentIdentity, a list whose elements carry an .Id (e.g. "PowerfulMapBoss").
+    // The Id is space-stripped, while ContentTypes keys/names have spaces ("Powerful Map Boss"),
+    // so match by stripping spaces from the key.
+    private void AddNodeContentFromIdentity(AtlasNodeDescription node, Node toNode) {
+        var contentIdentity = node.Element?.ContentIdentity;
+        if (contentIdentity == null)
+            return;
+
+        foreach (var content in contentIdentity) {
+            var id = content?.Id;
+            if (string.IsNullOrEmpty(id))
+                continue;
+
+            var contentType = Settings.MapContent.ContentTypes.TryGetValue(id, out var direct)
+                ? direct
+                : Settings.MapContent.ContentTypes.FirstOrDefault(x => x.Key.Replace(" ", "") == id).Value;
+
+            if (contentType != null)
+                toNode.Content.TryAdd(contentType.Name, contentType);
+        }
+    }
+
     private void AddNodeContentTowers(AtlasNodeDescription node, Node toNode) {
         var aux = (node.Element.Height == 110); // tower height is 110
         if (aux)
@@ -1069,7 +1101,14 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private void DrawContentRings(Node cachedNode, RectangleF nodeCurrentPosition)
     {
         int ringCount = 0;
-        foreach (Content content in cachedNode.Content.Values.Where(x => x != null).OrderBy(x => x.Name))
+
+        foreach (var contentName in ContentRingDrawOrder)
+            if (cachedNode.Content.TryGetValue(contentName, out var orderedContent) && orderedContent != null)
+                ringCount += DrawContentRing(cachedNode, nodeCurrentPosition, ringCount, orderedContent);
+
+        foreach (Content content in cachedNode.Content.Values
+                     .Where(x => x != null && !ContentRingDrawOrderLookup.Contains(x.Name))
+                     .OrderBy(x => x.Name))
             ringCount += DrawContentRing(cachedNode, nodeCurrentPosition, ringCount, content);
     }
 
