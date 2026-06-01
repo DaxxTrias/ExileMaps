@@ -98,7 +98,7 @@
     "ShortestId": "MapBackwash",
     "Biomes": [
       "Swamp",
-      "",
+      "Forest",
       ""
     ],
     "NameColor": "255, 255, 255, 255",
@@ -947,7 +947,7 @@
     "Biomes": [
       "Forest",
       "Swamp",
-      ""
+      "Water"
     ],
     "NameColor": "255, 255, 255, 255",
     "BackgroundColor": "220, 0, 0, 0",
@@ -1376,7 +1376,7 @@
     ],
     "ShortestId": "MapVaalFactory",
     "Biomes": [
-      "",
+      "Grass",
       "",
       ""
     ],
@@ -1976,7 +1976,7 @@
     ],
     "ShortestId": "MapOvergrown",
     "Biomes": [
-      "",
+      "Forest",
       "",
       ""
     ],
@@ -2548,7 +2548,7 @@
     ],
     "ShortestId": "MapExcavation",
     "Biomes": [
-      "",
+      "Desert",
       "",
       ""
     ],
