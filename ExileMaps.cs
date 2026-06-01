@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -47,6 +48,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         "Map Boss",
         "Anomaly Map Boss",
         "Powerful Map Boss",
+        "Deadly Map Boss",
         "Cleansed",
         "Corrupted",
         "Corrupted Nexus",
@@ -526,14 +528,78 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return;
 
         if (TryGetCachedNode(closestNode.Coordinates, out Node cachedNode))
-            LogMessage(cachedNode.ToString());
+            LogMessage(BuildNodeDebugText(cachedNode));
 
     }
 
     private void DrawDebugging(Node cachedNode) {
         using (Graphics.SetTextScale(Settings.MapMods.MapModScale))
-            DrawCenteredTextWithBackground(cachedNode.DebugText(), cachedNode.MapNode.Element.GetClientRect().Center, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);
+            DrawCenteredTextWithBackground(BuildNodeDebugText(cachedNode), cachedNode.MapNode.Element.GetClientRect().Center, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);
 
+    }
+
+    private string BuildNodeDebugText(Node cachedNode)
+    {
+        StringBuilder sb = new(cachedNode.DebugText());
+        AppendRawContentIdentityDebug(cachedNode, sb);
+        AppendRawContentTextureDebug(cachedNode, sb);
+        return sb.ToString();
+    }
+
+    private static void AppendRawContentIdentityDebug(Node cachedNode, StringBuilder sb)
+    {
+        try
+        {
+            var contentIdentity = cachedNode.MapNode?.Element?.ContentIdentity;
+            if (contentIdentity == null)
+            {
+                sb.AppendLine("RawContentIdentity: <null>");
+                return;
+            }
+
+            var ids = contentIdentity
+                .Select(x => x?.Id)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            sb.AppendLine(ids.Count == 0
+                ? "RawContentIdentity: <empty>"
+                : $"RawContentIdentity: {string.Join(", ", ids)}");
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine($"RawContentIdentity: <error: {ex.Message}>");
+        }
+    }
+
+    private static void AppendRawContentTextureDebug(Node cachedNode, StringBuilder sb)
+    {
+        try
+        {
+            var first = cachedNode.MapNode?.Element?.GetChildAtIndex(0);
+            var second = first?.GetChildAtIndex(0);
+            var children = second?.Children;
+            if (children == null)
+            {
+                sb.AppendLine("RawContentTextures: <null>");
+                return;
+            }
+
+            var textureNames = children
+                .Select(x => x?.TextureName)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            sb.AppendLine(textureNames.Count == 0
+                ? "RawContentTextures: <empty>"
+                : $"RawContentTextures: {string.Join(", ", textureNames)}");
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine($"RawContentTextures: <error: {ex.Message}>");
+        }
     }
 
     private void UpdateMapData() {
@@ -1282,13 +1348,41 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             if (string.IsNullOrEmpty(id))
                 continue;
 
-            var contentType = TryGetContentType(id, out var direct)
-                ? direct
-                : SnapshotContentTypes().FirstOrDefault(x => x.Key.Replace(" ", "") == id).Value;
+            var contentType = ResolveContentIdentityType(id);
 
             if (contentType != null)
                 toNode.Content.TryAdd(contentType.Name, contentType);
         }
+    }
+
+    private Content? ResolveContentIdentityType(string id)
+    {
+        if (TryGetContentType(id, out var direct))
+            return direct;
+
+        string normalizedId = NormalizeContentIdentity(id);
+        foreach (var contentType in SnapshotContentTypes())
+        {
+            if (string.Equals(NormalizeContentIdentity(contentType.Key), normalizedId, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(NormalizeContentIdentity(contentType.Value.Name), normalizedId, StringComparison.OrdinalIgnoreCase))
+                return contentType.Value;
+        }
+
+        return ResolveContentType(HumanizeContentIdentity(id));
+    }
+
+    private static string NormalizeContentIdentity(string value)
+    {
+        return Regex.Replace(value ?? string.Empty, @"[\s_-]+", string.Empty);
+    }
+
+    private static string HumanizeContentIdentity(string id)
+    {
+        string value = (id ?? string.Empty).Replace("_", " ").Replace("-", " ").Trim();
+        value = Regex.Replace(value, @"([A-Z]+)([A-Z][a-z])", "$1 $2");
+        value = Regex.Replace(value, @"([a-z0-9])([A-Z])", "$1 $2");
+        value = Regex.Replace(value, @"\s+", " ").Trim();
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : value;
     }
 
     private void AddNodeContentTowers(AtlasNodeDescription node, Node toNode) {

@@ -68,5 +68,10 @@
     "Color": "220, 0, 208, 255",
     "Name": "Powerful Map Boss",
     "Weight": 4.0
+  },
+  "Deadly Map Boss": {
+    "Color": "220, 0, 208, 255",
+    "Name": "Deadly Map Boss",
+    "Weight": 4.0
   }
 }
