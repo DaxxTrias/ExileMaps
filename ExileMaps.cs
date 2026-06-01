@@ -478,9 +478,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 if(Settings.MapTypes.Maps.TryGetValue(map.Name.Replace(" ", ""), out Map existingMap) && existingMap.IDs.Length == 0) {
                     Settings.MapTypes.Maps.Remove(existingMap.Name.Replace(" ",""));
                     existingMap.ID = key;
-                    existingMap.IDs = map.IDs;
-                    existingMap.ShortestId = map.ShortestId;
+                    MergeDefaultMapData(existingMap, map, key);
                     Settings.MapTypes.Maps.TryAdd(key, existingMap);                
+                } else if (Settings.MapTypes.Maps.TryGetValue(key, out existingMap)) {
+                    MergeDefaultMapData(existingMap, map, key);
                 } else {
                     // add new map
                     Settings.MapTypes.Maps.TryAdd(key, map);
@@ -488,6 +489,51 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             }
         } catch (Exception e) {
             LogError("Error loading default maps: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    private static void MergeDefaultMapData(Map existingMap, Map defaultMap, string defaultKey)
+    {
+        if (existingMap == null || defaultMap == null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(existingMap.Name) && !string.IsNullOrWhiteSpace(defaultMap.Name))
+            existingMap.Name = defaultMap.Name;
+
+        if (string.IsNullOrWhiteSpace(existingMap.ID))
+            existingMap.ID = defaultKey;
+
+        existingMap.IDs = MergeDistinctNonEmpty(existingMap.IDs, defaultMap.IDs);
+
+        if (string.IsNullOrWhiteSpace(existingMap.ShortestId) && !string.IsNullOrWhiteSpace(defaultMap.ShortestId))
+            existingMap.ShortestId = defaultMap.ShortestId;
+
+        existingMap.Biomes = MergeDistinctNonEmpty(existingMap.Biomes, defaultMap.Biomes);
+    }
+
+    private static string[] MergeDistinctNonEmpty(string[] existingValues, string[] defaultValues)
+    {
+        List<string> merged = [];
+
+        AddDistinctNonEmpty(merged, existingValues);
+        AddDistinctNonEmpty(merged, defaultValues);
+
+        return [.. merged];
+    }
+
+    private static void AddDistinctNonEmpty(List<string> values, string[] source)
+    {
+        if (source == null)
+            return;
+
+        foreach (var value in source)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                continue;
+
+            string trimmed = value.Trim();
+            if (!values.Any(x => string.Equals(x, trimmed, StringComparison.OrdinalIgnoreCase)))
+                values.Add(trimmed);
         }
     }
 
@@ -1242,17 +1288,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 LogError($"Error getting Content for map type {node.Address.ToString("X")}: " + e.Message);
             }
             
-            // Set Biomes
-            try {
-                var biomes = newNode.MapType.Biomes.Where(x => x != "").ToList();
-
-                foreach (var biome in biomes)                     
-                    if (Settings.Biomes.Biomes.TryGetValue(biome, out Biome newBiome)) 
-                        newNode.Biomes.TryAdd(newBiome.Name, newBiome);
-
-            }   catch (Exception e) {
-                LogError($"Error getting Biomes for map type {mapId}: " + e.Message);
-            }
+            AddNodeBiomes(newNode);
         }
     
         // Tower tablet mods have been removed from the game, so effect scanning is disabled.
@@ -1290,6 +1326,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         AddNodeContentTowers(node, cachedNode);
 
         AddNodeContentFromIdentity(node, cachedNode);
+        AddNodeBiomes(cachedNode);
 
         // Tower tablet mods have been removed from the game, so effect scanning is disabled.
         cachedNode.Effects.Clear();
@@ -1298,6 +1335,27 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             cachedNode.RecalculateWeight();
         return 1;
     } 
+
+    private void AddNodeBiomes(Node node)
+    {
+        try
+        {
+            node.Biomes.Clear();
+
+            var biomes = node.MapType.Biomes
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var biome in biomes)
+                if (Settings.Biomes.Biomes.TryGetValue(biome, out Biome newBiome))
+                    node.Biomes.TryAdd(newBiome.Name, newBiome);
+        }
+        catch (Exception e)
+        {
+            LogError($"Error getting Biomes for map type {node.Id}: " + e.Message);
+        }
+    }
     
     private void CacheMapConnections(Node cachedNode,
         Dictionary<Vector2i, List<Vector2i>> forwardPoints,
