@@ -27,6 +27,11 @@
         "Name": "Mountain",
         "Weight": 0.0
     },
+    "Ocean": {
+        "Color": "200, 35, 59, 90",
+        "Name": "Ocean",
+        "Weight": 0.0
+    },
     "Swamp": {
         "Color": "200, 138, 151, 126",
         "Name": "Swamp",
