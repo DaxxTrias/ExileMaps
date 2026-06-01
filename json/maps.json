@@ -569,7 +569,7 @@
     "ShortestId": "MapHeadland",
     "Biomes": [
       "Mountain",
-      "",
+      "Desert",
       ""
     ],
     "NameColor": "255, 255, 255, 255",
@@ -1248,7 +1248,7 @@
     ],
     "ShortestId": "MapTrenches",
     "Biomes": [
-      "",
+      "Forest",
       "",
       ""
     ],
@@ -1906,7 +1906,7 @@
     ],
     "ShortestId": "MapPlantation",
     "Biomes": [
-      "",
+      "Grass",
       "",
       ""
     ],
@@ -2060,7 +2060,7 @@
     ],
     "ShortestId": "MapSevenWaters",
     "Biomes": [
-      "",
+      "Desert",
       "",
       ""
     ],
@@ -2302,7 +2302,7 @@
     ],
     "ShortestId": "MapFlotsam",
     "Biomes": [
-      "",
+      "Water",
       "",
       ""
     ],
@@ -2500,7 +2500,7 @@
     ],
     "ShortestId": "MapRugosa",
     "Biomes": [
-      "",
+      "Water",
       "",
       ""
     ],
