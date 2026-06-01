@@ -346,7 +346,7 @@ public class MapSettings
                     ImGui.TableNextColumn();
                     float weight = map.Weight;
                     ImGui.SetNextItemWidth(100);
-                    if(ImGui.SliderFloat($"##{key}_weight", ref weight, -25.0f, 50.0f, "%.1f"))                        
+                    if(ImGui.SliderFloat($"##{key}_weight", ref weight, MapWeightSliderMin, MapWeightSliderMax, "%.1f"))                        
                         map.Weight = weight;
 
                     ImGui.TableNextColumn();
