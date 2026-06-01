@@ -622,14 +622,30 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
 
     private void UpdateMapData() {
-        var uniqueMapNames = AtlasPanel.Descriptions.Select(x => x.Element.Area.Name).Distinct().ToList();
+        if (AtlasPanel == null)
+            return;
+
+        Settings.MapTypes.Maps ??= [];
+
+        var mapData = SnapshotAtlasDescriptions()
+            .Select(node => TryGetAtlasNodeArea(node, out WorldArea area)
+                ? new { Name = area.Name?.Trim() ?? string.Empty, Id = area.Id?.Trim() ?? string.Empty }
+                : null)
+            .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Name) && !string.IsNullOrWhiteSpace(x.Id))
+            .ToList();
 
         // iterate through each name and find the ID for all mapes iwth that name
-        foreach (var name in uniqueMapNames) {
-            var maps = AtlasPanel.Descriptions.Where(x => x.Element.Area.Name == name).ToList();
-            var mapIds = maps.Select(x => x.Element.Area.Id).Distinct().ToList();
+        foreach (var mapGroup in mapData.GroupBy(x => x!.Name)) {
+            var name = mapGroup.Key;
+            var mapIds = mapGroup
+                .Select(x => x!.Id)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
             // get shortest item from list
             var shortID = mapIds.OrderBy(x => x.Length).FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(shortID))
+                continue;
+
             if (Settings.MapTypes.Maps.TryGetValue(name.Replace(" ", ""), out Map mapType) || Settings.MapTypes.Maps.TryGetValue(shortID, out mapType)) {        
                 Settings.MapTypes.Maps.Remove(name.Replace(" ", ""));                
                 Settings.MapTypes.Maps.TryAdd(shortID, mapType);
