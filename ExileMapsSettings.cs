@@ -401,17 +401,29 @@ public class MapSettings
     [Menu(null, parentIndex = 1032)]
     public CustomNode MapTable { get; set; }
 
+    [IgnoreMenu]
     public bool HighlightMapNodes { get; set; } = true;
+    [IgnoreMenu]
     public bool ColorNodesByWeight { get; set; } = true;
+    [IgnoreMenu]
     public bool DrawWeightOnMap { get; set; } = false;
+    [IgnoreMenu]
     public bool ShowMapNames { get; set; } = true;
+    [IgnoreMenu]
     public bool UseColorsForMapNames { get; set; } = true;
+    [IgnoreMenu]
     public bool UseWeightColorsForMapNames { get; set; } = true;
+    [IgnoreMenu]
     public bool ShowMapNamesOnUnlockedNodes { get; set; } = true;
+    [IgnoreMenu]
     public bool ShowMapNamesOnLockedNodes { get; set; } = true;
+    [IgnoreMenu]
     public bool ShowMapNamesOnHiddenNodes { get; set; } = true;
+    [IgnoreMenu]
     public Color GoodNodeColor { get; set; } = Color.FromArgb(200, 50, 255, 50);
+    [IgnoreMenu]
     public Color BadNodeColor { get; set; } = Color.FromArgb(200, 255, 50, 50);
+    [IgnoreMenu]
     public ObservableDictionary<string, Map> Maps { get; set; } = [];
 }
 
@@ -424,7 +436,9 @@ public class BiomeSettings
 {
     [JsonIgnore]
     public CustomNode CustomBiomeSettings { get; set; }
+    [IgnoreMenu]
     public bool ShowBiomeIcons { get; set; }
+    [IgnoreMenu]
     public ObservableDictionary<string, Biome> Biomes { get; set; } = [];
     public BiomeSettings() {    
 
@@ -510,11 +524,16 @@ public class ContentSettings
 {
     [JsonIgnore]
     public CustomNode CustomContentSettings { get; set; }
+    [IgnoreMenu]
     public ObservableDictionary<string, Content> ContentTypes { get; set; } = [];
 
+    [IgnoreMenu]
     public bool ShowRingsOnUnlockedNodes { get; set; } = true;
+    [IgnoreMenu]
     public bool ShowRingsOnLockedNodes { get; set; } = true;
+    [IgnoreMenu]
     public bool ShowRingsOnHiddenNodes { get; set; } = true;
+    [IgnoreMenu]
     public bool DrawContentIconsOnHiddenNodes { get; set; } = false;
 
 
@@ -621,11 +640,17 @@ public class MapModSettings
 {
     [JsonIgnore]
     public CustomNode ModSettings { get; set; }
+    [IgnoreMenu]
     public ObservableDictionary<string, Mod> MapModTypes { get; set; } = [];
+    [IgnoreMenu]
     public bool ShowOnTowers { get; set; } = true;
+    [IgnoreMenu]
     public bool ShowOnMaps { get; set; } = true;
+    [IgnoreMenu]
     public bool OnlyDrawApplicableMods { get; set; } = true;
+    [IgnoreMenu]
     public float MapModScale { get; set; } = 0.75f;
+    [IgnoreMenu]
     public int MapModOffset { get; set; } = 25;
 
     public MapModSettings() {    
@@ -789,17 +814,27 @@ public class WaypointSettings
 {
     [JsonIgnore]
     public CustomNode CustomWaypointSettings { get; set; }
+    [IgnoreMenu]
     public bool PanelIsOpen { get; set; } = false;
+    [IgnoreMenu]
     public bool ShowWaypoints { get; set; } = true;
+    [IgnoreMenu]
     public bool ShowWaypointArrows { get; set; } = true;
+    [IgnoreMenu]
     public bool InverWaypointArrowsColors { get; set; } = true;
 
+    [IgnoreMenu]
     public int WaypointPanelMaxItems { get; set; } = 30;
+    [IgnoreMenu]
     public string WaypointPanelSortBy { get; set; } = "Weight";
+    [IgnoreMenu]
     public bool WaypointsUseRegex { get; set; } = false;
+    [IgnoreMenu]
     public bool ShowUnlockedOnly { get; set; } = false;
     
+    [IgnoreMenu]
     public string WaypointPanelFilter { get; set; } = "";
+    [IgnoreMenu]
     public ObservableDictionary<string, Waypoint> Waypoints { get; set; } = [];
     public WaypointSettings() {    
         CustomWaypointSettings = new CustomNode
