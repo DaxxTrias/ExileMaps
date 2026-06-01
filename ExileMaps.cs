@@ -31,6 +31,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     #region Declarations
     public static ExileMapsCore Main;
 
+    public const float MapWeightSliderMin = -25.0f;
+    public const float MapWeightSliderMax = 50.0f;
+
     private const string defaultMapsPath = "json\\maps.json";
     private const string defaultModsPath = "json\\mods.json";
     private const string defaultBiomesPath = "json\\biomes.json";
@@ -72,8 +75,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private bool clearCacheOnNextRefresh;
     private Job? refreshCacheJob;
     private int atlasWarmupTicks;
-    private float maxMapWeight = 20.0f;
-    private float minMapWeight = -20.0f;
+    private float maxMapWeight = MapWeightSliderMax;
+    private float minMapWeight = MapWeightSliderMin;
     private readonly object mapCacheLock = new();
     private readonly object mapTypesLock = new();
     private readonly object mapContentLock = new();
@@ -185,7 +188,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (weightsDirty && !refreshingCache && DateTime.Now.Subtract(lastWeightRecalc).TotalMilliseconds > 250) {
             weightsDirty = false;
             lastWeightRecalc = DateTime.Now;
-            RecalculateWeights();
+            RecalculateWeights(recalculateNodeWeights: true);
         }
 
         // Waypoint paths only change when nodes get visited (which triggers a cache refresh) or when
@@ -1066,7 +1069,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             float average = count > 0 ? (float)time / count : 0;
             //LogMessage($"Map cache refreshed in {time}ms, {count} nodes processed, average time per node: {average:0.00}ms");
 
-            RecalculateWeights();
+            RecalculateWeights(Settings.Features.RecalculateNodeWeightsOnRefresh);
             UpdateWaypointPaths();
         }
         catch (Exception ex)
@@ -1110,25 +1113,38 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
     }
 
-    private void RecalculateWeights() {
+    private void RecalculateWeights(bool recalculateNodeWeights) {
 
         // Snapshot under the lock; the background refresh job mutates mapCache concurrently.
-        List<float> weights;
+        List<Node> cachedNodes;
         lock (mapCacheLock)
-            weights = mapCache.Values.Where(x => !x.IsVisited).Select(x => x.Weight).Distinct().ToList();
+            cachedNodes = mapCache.Values.ToList();
 
-        if (weights.Count == 0) {
-            minMapWeight = 0f;
-            maxMapWeight = 1f;
+        if (recalculateNodeWeights)
+            foreach (var node in cachedNodes)
+                node.RecalculateWeight();
+
+        bool hasWeights = false;
+        float observedMinWeight = float.MaxValue;
+        float observedMaxWeight = float.MinValue;
+
+        foreach (var node in cachedNodes) {
+            if (node.IsVisited)
+                continue;
+
+            hasWeights = true;
+            observedMinWeight = Math.Min(observedMinWeight, node.Weight);
+            observedMaxWeight = Math.Max(observedMaxWeight, node.Weight);
+        }
+
+        if (!hasWeights) {
+            minMapWeight = MapWeightSliderMin;
+            maxMapWeight = MapWeightSliderMax;
             return;
         }
 
-        // Single ascending sort, then index both ends (was two separate OrderBy passes).
-        // Clip outliers for color normalization: 6th-smallest and 11th-largest when enough samples.
-        weights.Sort();
-        int n = weights.Count;
-        minMapWeight = n > 5 ? weights[5] : weights[0];
-        maxMapWeight = n > 10 ? weights[n - 11] : weights[n - 1];
+        minMapWeight = Math.Min(MapWeightSliderMin, observedMinWeight);
+        maxMapWeight = Math.Max(MapWeightSliderMax, observedMaxWeight);
 
         if (maxMapWeight <= minMapWeight)
             maxMapWeight = minMapWeight + 1f;
@@ -1632,8 +1648,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return;
             
         var radius = (nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 4 * Settings.Graphics.NodeRadius;
-        var fraction = GetNormalizedWeight(cachedNode.Weight);
-        Color color = Settings.MapTypes.ColorNodesByWeight ? ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, fraction) : cachedNode.MapType.NodeColor;
+        Color color = Settings.MapTypes.ColorNodesByWeight ? GetWeightColor(cachedNode.Weight) : cachedNode.MapType.NodeColor;
         Graphics.DrawCircleFilled(nodeCurrentPosition.Center, radius, color, 16);
     }
 
@@ -1653,7 +1668,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         float offsetX = Settings.MapTypes.ShowMapNames ? (Graphics.MeasureText(cachedNode.Name.ToUpper()).X / 2) + 30 : 50;
         Vector2 position = new(nodeCurrentPosition.Center.X + offsetX, nodeCurrentPosition.Center.Y);
 
-        DrawCenteredTextWithBackground($"{(int)(fraction*100)}%", position, ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, fraction), Settings.Graphics.BackgroundColor, true, 10, 3);
+        DrawCenteredTextWithBackground($"{(int)(fraction*100)}%", position, GetWeightColorFromFraction(fraction), Settings.Graphics.BackgroundColor, true, 10, 3);
     }
     /// <summary>
     /// Draws the name of the map on the atlas.
@@ -1672,8 +1687,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         Color backgroundColor = Settings.MapTypes.UseColorsForMapNames ? cachedNode.MapType.BackgroundColor : Settings.Graphics.BackgroundColor;
         
         if (Settings.MapTypes.UseWeightColorsForMapNames) {
-            float fraction = GetNormalizedWeight(cachedNode.Weight);
-            fontColor = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, fraction);
+            fontColor = GetWeightColor(cachedNode.Weight);
         }
 
         DrawCenteredTextWithBackground(cachedNode.Name.ToUpper(), nodeCurrentPosition.Center, fontColor, backgroundColor, true, 10, 3);
@@ -2046,7 +2060,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private float GetNormalizedWeight(float value)
     {
-        // Normalize to [0,1] using current min/max, guarding against zero/NaN ranges
+        // Normalize to [0,1] using the configured weight domain plus any live outliers.
         float range = maxMapWeight - minMapWeight;
         if (range <= 1e-6f)
             return 0.5f;
@@ -2054,6 +2068,26 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (float.IsNaN(t) || float.IsInfinity(t))
             return 0.5f;
         return Math.Clamp(t, 0f, 1f);
+    }
+
+    private Color GetWeightColor(float value)
+    {
+        float fraction = GetNormalizedWeight(value);
+        return GetWeightColorFromFraction(fraction);
+    }
+
+    private Color GetWeightColorFromFraction(float fraction)
+    {
+        fraction = Math.Clamp(fraction, 0f, 1f);
+
+        Color badColor = Settings.MapTypes.BadNodeColor;
+        Color goodColor = Settings.MapTypes.GoodNodeColor;
+        int midpointAlpha = (badColor.A + goodColor.A) / 2;
+        Color midpointColor = Color.FromArgb(midpointAlpha, 255, 220, 0);
+
+        return fraction < 0.5f
+            ? ColorUtils.InterpolateColor(badColor, midpointColor, fraction * 2f)
+            : ColorUtils.InterpolateColor(midpointColor, goodColor, (fraction - 0.5f) * 2f);
     }
     
     #endregion
@@ -2375,8 +2409,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         // Weight
                         ImGui.TableNextColumn();
                         // set color
-                        float fraction = GetNormalizedWeight(node.Weight);        
-                        _color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor,Settings.MapTypes.GoodNodeColor, fraction);
+                        _color = GetWeightColor(node.Weight);
                         _colorVector = new Vector4(_color.R / 255.0f, _color.G / 255.0f, _color.B / 255.0f, _color.A / 255.0f);
                         ImGui.PushStyleColor(ImGuiCol.Text, _colorVector);
                         ImGui.TextUnformatted(node.Weight.ToString("0.0"));
@@ -2462,10 +2495,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (Settings.Waypoints.Waypoints.ContainsKey(cachedNode.Coordinates.ToString()))
             return;
 
-        float fraction = GetNormalizedWeight(cachedNode.Weight);
         Waypoint newWaypoint = cachedNode.ToWaypoint();
         newWaypoint.Icon = MapIconsIndex.LootFilterLargeWhiteUpsideDownHouse;
-        newWaypoint.Color = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, fraction);
+        newWaypoint.Color = GetWeightColor(cachedNode.Weight);
 
         Settings.Waypoints.Waypoints.Add(cachedNode.Coordinates.ToString(), newWaypoint);
         UpdateWaypointPaths();
