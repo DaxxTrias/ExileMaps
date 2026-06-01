@@ -549,7 +549,11 @@
       "MapGrimhaven_NoBoss"
     ],
     "ShortestId": "MapGrimhaven",
-    "Biomes": [],
+    "Biomes": [
+      "Grass",
+      "",
+      ""
+    ],
     "NameColor": "255, 255, 255, 255",
     "BackgroundColor": "216, 0, 0, 0",
     "NodeColor": "200, 155, 155, 155",
@@ -1928,7 +1932,7 @@
     ],
     "ShortestId": "MapEpitaph",
     "Biomes": [
-      "",
+      "Grass",
       "",
       ""
     ],
@@ -2038,7 +2042,7 @@
     ],
     "ShortestId": "MapSpring_",
     "Biomes": [
-      "",
+      "Desert",
       "",
       ""
     ],
@@ -2104,7 +2108,7 @@
     ],
     "ShortestId": "MapWaywardIsle",
     "Biomes": [
-      "",
+      "Water",
       "",
       ""
     ],
@@ -2126,7 +2130,7 @@
     ],
     "ShortestId": "MapStronghold",
     "Biomes": [
-      "",
+      "Water",
       "",
       ""
     ],
@@ -2280,7 +2284,7 @@
     ],
     "ShortestId": "MapSinkhole",
     "Biomes": [
-      "",
+      "Water",
       "",
       ""
     ],
