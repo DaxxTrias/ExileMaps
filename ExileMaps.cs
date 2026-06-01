@@ -307,6 +307,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     /// </summary>
     private void SubscribeToEvents() {
         try {
+            Settings.MapTypes.Maps ??= [];
+            Settings.Biomes.Biomes ??= [];
+            Settings.MapContent.ContentTypes ??= [];
+            Settings.MapMods.MapModTypes ??= [];
+
             Settings.MapTypes.Maps.CollectionChanged += (_, _) => { weightsDirty = true; };
             Settings.MapTypes.Maps.PropertyChanged += (_, _) => { weightsDirty = true; };
             Settings.Biomes.Biomes.PropertyChanged += (_, _) => { weightsDirty = true; };
@@ -407,6 +412,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
             var jsonFile = File.ReadAllText(Path.Combine(DirectoryFullName, defaultModsPath));
             var mods = JsonSerializer.Deserialize<Dictionary<string, Mod>>(jsonFile);
+            if (mods == null)
+                return;
 
             foreach (var mod in mods.OrderBy(x => x.Value.Name))
                 Settings.MapMods.MapModTypes.TryAdd(mod.Key, mod.Value);
@@ -419,8 +426,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private void LoadDefaultBiomes() {
         try {
+            Settings.Biomes.Biomes ??= [];
+
             var jsonFile = File.ReadAllText(Path.Combine(DirectoryFullName, defaultBiomesPath));
             var biomes = JsonSerializer.Deserialize<Dictionary<string, Biome>>(jsonFile);
+            if (biomes == null)
+                return;
 
             foreach (var biome in biomes.Where(x => x.Value.Name != "").OrderBy(x => x.Value.Name))
                 Settings.Biomes.Biomes.TryAdd(biome.Key, biome.Value);  
@@ -434,8 +445,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private void LoadDefaultContentTypes() {
         try {
+            Settings.MapContent.ContentTypes ??= [];
+
             var jsonFile = File.ReadAllText(Path.Combine(DirectoryFullName, defaultContentPath));
             var contentTypes = JsonSerializer.Deserialize<Dictionary<string, Content>>(jsonFile);
+            if (contentTypes == null)
+                return;
 
             foreach (var content in contentTypes.OrderBy(x => x.Value.Name))
                 Settings.MapContent.ContentTypes.TryAdd(content.Key, content.Value);   
@@ -450,8 +465,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     public void LoadDefaultMaps()
     {
         try {
+            Settings.MapTypes.Maps ??= [];
+
             var jsonFile = File.ReadAllText(Path.Combine(DirectoryFullName, defaultMapsPath));
             var maps = JsonSerializer.Deserialize<Dictionary<string, Map>>(jsonFile);
+            if (maps == null)
+                return;
 
             foreach (var (key,map) in maps.OrderBy(x => x.Value.Name)) {
 

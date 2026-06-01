@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Linq;
@@ -323,10 +323,11 @@ public class MapSettings
                 ImGui.TableSetupColumn("Biomes", ImGuiTableColumnFlags.WidthStretch, 200);   
                 ImGui.TableHeadersRow();
                 
-                if (Maps.Count == 0)   
-                    Main.LoadDefaultMaps();
+                Maps ??= [];
+                if (Maps.Count == 0)
+                    Main?.LoadDefaultMaps();
                 
-                foreach (var (key,map) in Maps.OrderBy(x => x.Value.Name))
+                foreach (var (key,map) in Maps.Where(x => x.Value != null).OrderBy(x => x.Value.Name ?? x.Key))
                 {
                     ImGui.PushID($"Map_{key}");
                     ImGui.TableNextRow();
@@ -339,7 +340,7 @@ public class MapSettings
 
                     // Name
                     ImGui.SameLine();
-                    ImGui.Text(map.Name);
+                    ImGui.TextUnformatted(map.Name ?? key);
 
                     // Weight
                     ImGui.TableNextColumn();
@@ -379,7 +380,7 @@ public class MapSettings
                     
                     // Biomes
                     ImGui.TableNextColumn();
-                    ImGui.Text(map.BiomesToString() ?? "None");
+                    ImGui.TextUnformatted(map.BiomesToString() ?? "None");
 
                     ImGui.PopID();
                 }                
@@ -462,14 +463,15 @@ public class BiomeSettings
                     ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch, 50);
                     ImGui.TableHeadersRow();
 
-                    foreach (var (key,biome) in Biomes.OrderBy(x => x.Value.Name))
+                    Biomes ??= [];
+                    foreach (var (key,biome) in Biomes.Where(x => x.Value != null).OrderBy(x => x.Value.Name ?? x.Key))
                     {
                         ImGui.PushID($"Biome_{key}");
                         ImGui.TableNextRow();
 
                         // Name
                         ImGui.TableNextColumn();
-                        ImGui.Text(key);
+                        ImGui.TextUnformatted(key);
 
                         // Weight
                         ImGui.TableNextColumn();
@@ -572,13 +574,14 @@ public class ContentSettings
                     ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch, 50);
                     ImGui.TableHeadersRow();
 
-                    foreach (var (key,content) in ContentTypes.OrderBy(x => x.Value.Name))
+                    ContentTypes ??= [];
+                    foreach (var (key,content) in ContentTypes.Where(x => x.Value != null).OrderBy(x => x.Value.Name ?? x.Key))
                     {
                         ImGui.PushID($"Content_{key}");
                         ImGui.TableNextRow();
 
                         ImGui.TableNextColumn();
-                        ImGui.Text(key);
+                        ImGui.TextUnformatted(key);
 
                         ImGui.TableNextColumn();
                         float weight = content.Weight;                        
@@ -618,7 +621,7 @@ public class MapModSettings
 {
     [JsonIgnore]
     public CustomNode ModSettings { get; set; }
-    public ObservableDictionary<string, Mod> MapModTypes { get; set; }
+    public ObservableDictionary<string, Mod> MapModTypes { get; set; } = [];
     public bool ShowOnTowers { get; set; } = true;
     public bool ShowOnMaps { get; set; } = true;
     public bool OnlyDrawApplicableMods { get; set; } = true;
@@ -701,8 +704,11 @@ public class MapModSettings
                 ImGui.TextWrapped("NOTE: All mod weights are multiplied by the mod value.");
                 ImGui.Spacing();
 
+                MapModTypes ??= [];
+                bool modTableOpen = false;
                 try {
-                    if (ImGui.BeginTable("mod_table", 6, ImGuiTableFlags.Borders))
+                    modTableOpen = ImGui.BeginTable("mod_table", 6, ImGuiTableFlags.Borders);
+                    if (modTableOpen)
                     {
                         ImGui.TableSetupColumn("Mod Type", ImGuiTableColumnFlags.WidthFixed, 250);                                                               
                         ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 100);     
@@ -711,14 +717,14 @@ public class MapModSettings
                         ImGui.TableSetupColumn("Show", ImGuiTableColumnFlags.WidthFixed, 50);                        
                         ImGui.TableSetupColumn("Description", ImGuiTableColumnFlags.WidthStretch, 300);
                         ImGui.TableHeadersRow();
-                        foreach (var (key,mod) in MapModTypes.OrderBy(x => x.Value.ModID))
+                        foreach (var (key,mod) in MapModTypes.Where(x => x.Value != null).OrderBy(x => x.Value.ModID ?? x.Key))
                         {
                             ImGui.PushID($"Mod_{key}");
                             ImGui.TableNextRow();
 
                             ImGui.TableNextColumn();
                             // Add a space between each word in ModID: Example TowerDeliriumChance should become Tower Delirium Chance
-                            string modID = mod.ModID.Replace("Tower","");
+                            string modID = (mod.ModID ?? key).Replace("Tower","");
                             modID = string.Concat(modID.Select(x => Char.IsUpper(x) ? " " + x : x.ToString())).TrimStart(' ');                        
                             ImGui.TextUnformatted(modID);
 
@@ -764,9 +770,10 @@ public class MapModSettings
                         }  
                     }              
                 } catch (Exception ex) {
-                    Main.LogMessage($"Error loading map mods table: {ex.Message}\n{ex.StackTrace}");
+                    Main?.LogMessage($"Error loading map mods table: {ex.Message}\n{ex.StackTrace}");
                 } finally {
-                    ImGui.EndTable();
+                    if (modTableOpen)
+                        ImGui.EndTable();
                 }
             }   
         };
