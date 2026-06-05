@@ -54,7 +54,9 @@
     "ShortestId": "MapAugury",
     "Biomes": [
       "Forest",
-      "Swamp"
+      "Swamp",
+      "Grass",
+      ""
     ],
     "NameColor": "255, 255, 255, 255",
     "BackgroundColor": "220, 0, 0, 0",
@@ -269,7 +271,7 @@
     "ShortestId": "MapCenotes",
     "Biomes": [
       "Mountain",
-      "",
+      "Desert",
       ""
     ],
     "NameColor": "255, 255, 255, 255",
@@ -551,7 +553,9 @@
         ],
         "ShortestId": "MapGreenhouse",
         "Biomes": [
-          "Forest"
+          "Forest",
+          "Grass",
+          ""
         ],
         "NameColor": "White",
         "BackgroundColor": "220, 0, 0, 0",
@@ -1067,6 +1071,29 @@
     "LockedCount": 0,
     "FogCount": 0,
     "Weight": -10
+  },
+  "MapSnowfall": {
+    "Name": "Snowfall",
+    "ID": "",
+    "IDs": [
+      "MapSnowfall",
+      "MapSnowfall_NoBoss"
+    ],
+    "ShortestId": "MapSnowfall",
+    "Biomes": [
+      "Mountain",
+      "",
+      ""
+    ],
+    "NameColor": "White",
+    "BackgroundColor": "220, 0, 0, 0",
+    "NodeColor": "200, 155, 155, 155",
+    "DrawLine": false,
+    "Highlight": true,
+    "Count": 0,
+    "LockedCount": 0,
+    "FogCount": 0,
+    "Weight": 1.0
   },
   "MapHideoutShrine_Claimable": {
     "Name": "Shrine Hideout",
@@ -2318,6 +2345,29 @@
     "LockedCount": 0,
     "FogCount": 0,
     "Weight": 1
+  },
+  "MapSinterRift": {
+    "Name": "Sinter Rift",
+    "ID": "",
+    "IDs": [
+      "MapSinterRift",
+      "MapSinterRift_NoBoss"
+    ],
+    "ShortestId": "MapSinterRift",
+    "Biomes": [
+      "Mountain",
+      "",
+      ""
+    ],
+    "NameColor": "White",
+    "BackgroundColor": "220, 0, 0, 0",
+    "NodeColor": "200, 155, 155, 155",
+    "DrawLine": false,
+    "Highlight": true,
+    "Count": 0,
+    "LockedCount": 0,
+    "FogCount": 0,
+    "Weight": 1.0
   },
   "MapFlotsam": {
     "Name": "Flotsam",
