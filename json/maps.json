@@ -1148,6 +1148,7 @@
     "Biomes": [
       "Mountain",
       "Desert",
+      "Grass",
       ""
     ],
     "NameColor": "255, 255, 255, 255",
@@ -1906,6 +1907,29 @@
     "FogCount": 0,
     "Weight": 1
   },
+  "MapPit": {
+    "Name": "Pit",
+    "ID": "",
+    "IDs": [
+      "MapPit",
+      "MapPit_NoBoss"
+    ],
+    "ShortestId": "MapPit",
+    "Biomes": [
+      "Mountain",
+      "",
+      ""
+    ],
+    "NameColor": "255, 255, 255, 255",
+    "BackgroundColor": "220, 0, 0, 0",
+    "NodeColor": "200, 155, 155, 155",
+    "DrawLine": false,
+    "Highlight": true,
+    "Count": 0,
+    "LockedCount": 0,
+    "FogCount": 0,
+    "Weight": 1.0
+  },
   "MapKarst": {
     "Name": "Karst",
     "IDs": [
@@ -2509,7 +2533,7 @@
     ],
     "ShortestId": "MapOrnateChambers",
     "Biomes": [
-      "",
+      "Desert",
       "",
       ""
     ],
@@ -2531,7 +2555,7 @@
     ],
     "ShortestId": "MapCanyon",
     "Biomes": [
-      "",
+      "Desert",
       "",
       ""
     ],
@@ -2553,7 +2577,7 @@
     ],
     "ShortestId": "MapRazedFields",
     "Biomes": [
-      "",
+      "Grass",
       "",
       ""
     ],
@@ -2597,7 +2621,7 @@
     ],
     "ShortestId": "MapRiverhold",
     "Biomes": [
-      "",
+      "Grass",
       "",
       ""
     ],
