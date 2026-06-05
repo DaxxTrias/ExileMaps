@@ -54,7 +54,6 @@
     "ShortestId": "MapAugury",
     "Biomes": [
       "Forest",
-      "Forest",
       "Swamp"
     ],
     "NameColor": "255, 255, 255, 255",
@@ -121,7 +120,8 @@
     "Biomes": [
       "Mountain",
       "Grass",
-      "Desert"
+      "Desert",
+      "Forest"
     ],
     "NameColor": "255, 255, 255, 255",
     "BackgroundColor": "220, 0, 0, 0",
@@ -542,6 +542,27 @@
     "FogCount": 0,
     "Weight": 10
   },
+  "MapGreenhouse": {
+        "Name": "Greenhouse",
+        "ID": "",
+        "IDs": [
+          "MapGreenhouse",
+          "MapGreenhouse_NoBoss"
+        ],
+        "ShortestId": "MapGreenhouse",
+        "Biomes": [
+          "Forest"
+        ],
+        "NameColor": "White",
+        "BackgroundColor": "220, 0, 0, 0",
+        "NodeColor": "200, 155, 155, 155",
+        "DrawLine": false,
+        "Highlight": true,
+        "Count": 0,
+        "LockedCount": 0,
+        "FogCount": 0,
+        "Weight": 1.0
+      },
   "MapGrimhaven": {
     "Name": "Grimhaven",
     "IDs": [
