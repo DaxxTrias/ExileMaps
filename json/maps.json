@@ -1230,7 +1230,7 @@
     ],
     "ShortestId": "MapSunTemple",
     "Biomes": [
-      "",
+      "Vaal City",
       "",
       ""
     ],
@@ -1355,7 +1355,7 @@
     "ShortestId": "MapVaalCity",
     "Biomes": [
       "Swamp",
-      "",
+      "Vaal City",
       ""
     ],
     "NameColor": "255, 255, 255, 255",
@@ -1369,7 +1369,7 @@
     "Weight": 1
   },
   "MapVaalFactory": {
-    "Name": "Vaal Factory",
+    "Name": "The Assembly",
     "IDs": [
       "MapVaalFactory_NoBoss",
       "MapVaalFactory"
@@ -1377,7 +1377,7 @@
     "ShortestId": "MapVaalFactory",
     "Biomes": [
       "Grass",
-      "",
+      "Vaal City",
       ""
     ],
     "NameColor": "255, 255, 255, 255",
