@@ -557,7 +557,7 @@
           "Grass",
           ""
         ],
-        "NameColor": "White",
+        "NameColor": "255, 255, 255, 255",
         "BackgroundColor": "220, 0, 0, 0",
         "NodeColor": "200, 155, 155, 155",
         "DrawLine": false,
@@ -1085,7 +1085,7 @@
       "",
       ""
     ],
-    "NameColor": "White",
+    "NameColor": "255, 255, 255, 255",
     "BackgroundColor": "220, 0, 0, 0",
     "NodeColor": "200, 155, 155, 155",
     "DrawLine": false,
@@ -2359,7 +2359,7 @@
       "",
       ""
     ],
-    "NameColor": "White",
+    "NameColor": "255, 255, 255, 255",
     "BackgroundColor": "220, 0, 0, 0",
     "NodeColor": "200, 155, 155, 155",
     "DrawLine": false,
