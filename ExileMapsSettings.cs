@@ -88,6 +88,9 @@ public class HotkeySettings
     [Menu("Add Waypoint Hotkey", "Default: ,")]
     public HotkeyNode AddWaypointHotkey { get; set; } = new HotkeyNode(Keys.Insert);
 
+    [Menu("Quick Edit Node Hotkey", "Hover a node on the Atlas and press to open a popup that edits that map type and its content without opening settings.")]
+    public HotkeyNode QuickEditNodeHotkey { get; set; } = new HotkeyNode(Keys.F13);
+
     [Menu("Remove Waypoint Hotkey", "Default: .")]
     public HotkeyNode DeleteWaypointHotkey { get; set; } = new HotkeyNode(Keys.Delete);
 
