@@ -177,6 +177,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         if (WaypointPanelIsOpen) DrawWaypointPanel();
 
+        if (quickEditOpen) DrawQuickEditPanel();
+
         TickCount++;
 
         if (!AtlasPanel.IsVisible) return;
@@ -299,6 +301,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RegisterHotkey(Settings.Keybinds.ToggleDebugModeHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleWaypointPanelHotkey);
         RegisterHotkey(Settings.Keybinds.AddWaypointHotkey);
+        RegisterHotkey(Settings.Keybinds.QuickEditNodeHotkey);
         RegisterHotkey(Settings.Keybinds.DeleteWaypointHotkey);
         RegisterHotkey(Settings.Keybinds.ShowTowerRangeHotkey);
         RegisterHotkey(Settings.Keybinds.UpdateMapsKey);
@@ -343,8 +346,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             WaypointPanelIsOpen = !WaypointPanelIsOpen;
         }
 
-        if (Settings.Keybinds.AddWaypointHotkey.PressedOnce())        
+        if (Settings.Keybinds.AddWaypointHotkey.PressedOnce())
             AddWaypoint(GetClosestNodeToCursor());
+
+        if (Settings.Keybinds.QuickEditNodeHotkey.PressedOnce()) {
+            var editNode = GetClosestNodeToCursor();
+            if (editNode != null) { quickEditNode = editNode; quickEditOpen = true; }
+        }
 
         if (Settings.Keybinds.DeleteWaypointHotkey.PressedOnce())        
             RemoveWaypoint(GetClosestNodeToCursor());
@@ -1306,7 +1314,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             iconPosition -= new Vector2(iconSize.X / 2, iconSize.Y);
 
             RectangleF iconRect = new RectangleF(iconPosition.X, iconPosition.Y, iconSize.X, iconSize.Y);
-            Graphics.DrawImage(IconsFile, iconRect, SpriteHelper.GetUV(MapIconsIndex.LootFilterLargeWhiteStar), Settings.Graphics.FavoriteColor);
+            if (customIconsLoaded)
+                DrawNodeSprite(iconRect.Center, iconRect.Width, iconRect.Height, SpriteIcon.Star5, Settings.Graphics.FavoriteColor, allowFlatten: false);
+            else
+                Graphics.DrawImage(IconsFile, iconRect, SpriteHelper.GetUV(MapIconsIndex.LootFilterLargeWhiteStar), Settings.Graphics.FavoriteColor);
         } catch (Exception e) {
             LogError("Error drawing favorite indicator: " + e.Message);
         }
@@ -1809,6 +1820,102 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     
     #endregion
     #region Waypoint Panel
+    // MARK: Quick Edit
+    // Node currently being edited via the hover hotkey, and whether the popup is showing.
+    private Node quickEditNode;
+    private bool quickEditOpen;
+
+    private static void QuickColorEdit(string id, Color color, Action<Color> set) {
+        Vector4 v = new(color.R / 255f, color.G / 255f, color.B / 255f, color.A / 255f);
+        if (ImGui.ColorEdit4($"##{id}", ref v, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs))
+            set(Color.FromArgb((int)(v.W * 255), (int)(v.X * 255), (int)(v.Y * 255), (int)(v.Z * 255)));
+    }
+
+    /// MARK: DrawQuickEditPanel
+    /// Floating popup (opened by the Quick Edit hotkey while hovering a node) to edit that node's
+    /// map type and its content types inline. Edits the shared Map/Content instances, so changes
+    /// persist to settings and apply live.
+    private void DrawQuickEditPanel() {
+        try {
+            var map = quickEditNode?.MapType;
+            if (quickEditNode == null || map == null) { quickEditOpen = false; quickEditNode = null; return; }
+
+            Vector2 pos;
+            try { pos = quickEditNode.MapNode.Element.GetClientRect().Center + new Vector2(30, 0); }
+            catch { pos = screenCenter; }
+            ImGui.SetNextWindowPos(pos, ImGuiCond.Appearing);
+            ImGui.SetNextWindowSize(new Vector2(360, 0), ImGuiCond.Appearing);
+            ImGui.SetNextWindowBgAlpha(0.93f);
+
+            if (ImGui.Begin($"Quick Edit###quickedit", ref quickEditOpen, ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.AlwaysAutoResize)) {
+                ImGui.TextDisabled($"{quickEditNode.Name}  ({map.Name})");
+                ImGui.Separator();
+
+                bool highlight = map.Highlight;
+                if (ImGui.Checkbox("Highlight##qe", ref highlight)) map.Highlight = highlight;
+                ImGui.SameLine();
+                bool fav = map.Favorite;
+                if (ImGui.Checkbox("Favorite##qe", ref fav)) map.Favorite = fav;
+                ImGui.SameLine();
+                bool drawLine = map.DrawLine;
+                if (ImGui.Checkbox("Line##qe", ref drawLine)) map.DrawLine = drawLine;
+
+                float weight = map.Weight;
+                ImGui.SetNextItemWidth(220);
+                if (ImGui.SliderFloat("Weight##qe", ref weight, -25f, 50f, "%.1f")) map.Weight = weight;
+
+                QuickColorEdit("qe_node", map.NodeColor, c => map.NodeColor = c);
+                ImGui.SameLine(); ImGui.Text("Node");
+                ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
+                QuickColorEdit("qe_name", map.NameColor, c => map.NameColor = c);
+                ImGui.SameLine(); ImGui.Text("Name");
+                ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
+                QuickColorEdit("qe_bg", map.BackgroundColor, c => map.BackgroundColor = c);
+                ImGui.SameLine(); ImGui.Text("Text BG");
+
+                bool cbw = map.ColorNodesByWeight;
+                if (ImGui.Checkbox("Color node by weight##qe", ref cbw)) map.ColorNodesByWeight = cbw;
+                bool nbw = map.UseWeightColorForName;
+                if (ImGui.Checkbox("Color name by weight##qe", ref nbw)) map.UseWeightColorForName = nbw;
+
+                ImGui.Text("Icon"); ImGui.SameLine();
+                SettingsHelpers.IconPicker("qeicon", map.Icon, i => map.Icon = i);
+
+                if (quickEditNode.Content.Count > 0) {
+                    ImGui.Separator();
+                    ImGui.Text("Content");
+                    foreach (var (cname, content) in quickEditNode.Content) {
+                        ImGui.PushID($"qe_c_{cname}");
+                        QuickColorEdit("col", content.Color, c => content.Color = c);
+                        ImGui.SameLine();
+                        bool ring = content.Highlight;
+                        if (ImGui.Checkbox("Ring##c", ref ring)) content.Highlight = ring;
+                        ImGui.SameLine();
+                        bool cfav = content.Favorite;
+                        if (ImGui.Checkbox("Fav##c", ref cfav)) content.Favorite = cfav;
+                        ImGui.SameLine();
+                        float cw = content.Weight;
+                        ImGui.SetNextItemWidth(110);
+                        if (ImGui.SliderFloat("##cw", ref cw, -5f, 5f, "%.2f")) content.Weight = cw;
+                        ImGui.SameLine();
+                        ImGui.TextUnformatted(content.Name);
+                        ImGui.PopID();
+                    }
+                }
+
+                ImGui.Separator();
+                if (ImGui.Button("Close##qe")) quickEditOpen = false;
+            }
+            ImGui.End();
+
+            if (!quickEditOpen) quickEditNode = null;
+        } catch (Exception e) {
+            LogError("Error drawing quick edit panel: " + e.Message);
+            quickEditOpen = false;
+            quickEditNode = null;
+        }
+    }
+
     private void DrawWaypointPanel() {
         Vector2 panelSize = new Vector2(UI.SettingsPanel.GetClientRect().Width, UI.SettingsPanel.GetClientRect().Height);
         Vector2 panelPosition = UI.SettingsPanel.GetClientRect().TopLeft;
