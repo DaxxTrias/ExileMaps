@@ -75,6 +75,22 @@ public class FeatureSettings
     [Menu("Recalculate Node Weights on Refresh", "Recompute each node's weight when the map cache refreshes so weight (and weight-based colors/sorting) reflect live content and tablet mods. Disable to save performance if weights don't need to update after the first scan.")]
     public ToggleNode RecalculateNodeWeightsOnRefresh { get; set; } = new ToggleNode(true);
 
+
+    [Menu("Enable Atlas Offset Correction", "Manually offset atlas overlay positions if the game UI layout shifts them, such as when using controller UI.")]
+    public ToggleNode EnableAtlasOffsetCorrection { get; set; } = new ToggleNode(false);
+
+    [ConditionalDisplay(nameof(EnableAtlasOffsetCorrection), true)]
+    [Menu("Atlas Offset X", "Moves the overlay left/right. Negative = left, positive = right.")]
+    public RangeNode<int> AtlasOffsetX { get; set; } = new RangeNode<int>(0, -500, 500);
+
+    [ConditionalDisplay(nameof(EnableAtlasOffsetCorrection), true)]
+    [Menu("Atlas Offset Y", "Moves the overlay up/down. Negative = up, positive = down.")]
+    public RangeNode<int> AtlasOffsetY { get; set; } = new RangeNode<int>(0, -500, 500);
+
+    [ConditionalDisplay(nameof(EnableAtlasOffsetCorrection), true)]
+    [Menu("Atlas Offset Hotkey Step", "How many pixels each offset hotkey changes the overlay.")]
+    public RangeNode<int> AtlasOffsetHotkeyStep { get; set; } = new RangeNode<int>(1, 1, 25);
+
     [Menu("Debug Mode")]
     public ToggleNode DebugMode { get; set; } = new ToggleNode(false);
 
@@ -82,6 +98,19 @@ public class FeatureSettings
 [Submenu(CollapsedByDefault = true)]
 public class HotkeySettings
 {
+
+    [Menu("Atlas Offset Left")]
+    public HotkeyNode AtlasOffsetLeftHotkey { get; set; } = new HotkeyNode(Keys.None);
+
+    [Menu("Atlas Offset Right")]
+    public HotkeyNode AtlasOffsetRightHotkey { get; set; } = new HotkeyNode(Keys.None);
+
+    [Menu("Atlas Offset Up")]
+    public HotkeyNode AtlasOffsetUpHotkey { get; set; } = new HotkeyNode(Keys.None);
+
+    [Menu("Atlas Offset Down")]
+    public HotkeyNode AtlasOffsetDownHotkey { get; set; } = new HotkeyNode(Keys.None);
+
     [Menu("Map Cache Refresh Hotkey", "Default: ]")]
     public HotkeyNode RefreshMapCacheHotkey { get; set; } = new HotkeyNode(Keys.Home);
 

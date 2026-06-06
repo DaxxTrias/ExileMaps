@@ -344,6 +344,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RegisterHotkey(Settings.Keybinds.ToggleUnlockedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleVisitedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleHiddenNodesHotkey);
+        RegisterHotkey(Settings.Keybinds.AtlasOffsetLeftHotkey);
+        RegisterHotkey(Settings.Keybinds.AtlasOffsetRightHotkey);
+        RegisterHotkey(Settings.Keybinds.AtlasOffsetUpHotkey);
+        RegisterHotkey(Settings.Keybinds.AtlasOffsetDownHotkey);
     }
     
     private static void RegisterHotkey(HotkeyNode hotkey)
@@ -355,6 +359,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         // Defensive null check - AtlasPanel can be null during scene transitions
         if (AtlasPanel == null || !AtlasPanel.IsVisible)
             return;
+
+        HandleAtlasOffsetHotkeys();
 
         if (Settings.Keybinds.RefreshMapCacheHotkey.PressedOnce()) {
             RequestMapCacheRefresh(clearCache: true);
@@ -405,6 +411,27 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
 
     }
+
+    private void HandleAtlasOffsetHotkeys()
+    {
+        if (!Settings.Features.EnableAtlasOffsetCorrection.Value)
+            return;
+
+        int step = Settings.Features.AtlasOffsetHotkeyStep.Value;
+
+        if (Settings.Keybinds.AtlasOffsetLeftHotkey.PressedOnce())
+            Settings.Features.AtlasOffsetX.Value = Math.Clamp(Settings.Features.AtlasOffsetX.Value - step, -500, 500);
+
+        if (Settings.Keybinds.AtlasOffsetRightHotkey.PressedOnce())
+            Settings.Features.AtlasOffsetX.Value = Math.Clamp(Settings.Features.AtlasOffsetX.Value + step, -500, 500);
+
+        if (Settings.Keybinds.AtlasOffsetUpHotkey.PressedOnce())
+            Settings.Features.AtlasOffsetY.Value = Math.Clamp(Settings.Features.AtlasOffsetY.Value - step, -500, 500);
+
+        if (Settings.Keybinds.AtlasOffsetDownHotkey.PressedOnce())
+            Settings.Features.AtlasOffsetY.Value = Math.Clamp(Settings.Features.AtlasOffsetY.Value + step, -500, 500);
+    }
+
     #endregion
 
     #region Load Defaults
@@ -601,8 +628,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
 
     private void DrawDebugging(Node cachedNode) {
+        if (!TryGetNodeRect(cachedNode, out RectangleF nodeRect))
+            return;
+
         using (Graphics.SetTextScale(Settings.MapMods.MapModScale))
-            DrawCenteredTextWithBackground(BuildNodeDebugText(cachedNode), cachedNode.MapNode.Element.GetClientRect().Center, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);
+            DrawCenteredTextWithBackground(BuildNodeDebugText(cachedNode), nodeRect.Center, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);
 
     }
 
@@ -768,7 +798,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             .FirstOrDefault();
     }
     private Node GetClosestNodeToCursor() {
-        var closestNode = AtlasPanel.Descriptions.OrderBy(x => Vector2.Distance(GameController.Game.IngameState.UIHoverElement.GetClientRect().Center, x.Element.GetClientRect().Center)).AsParallel().FirstOrDefault();
+        Vector2 cursorPosition = GameController.Game.IngameState.UIHoverElement.GetClientRect().Center;
+        var closestNode = AtlasPanel.Descriptions
+            .OrderBy(x => Vector2.Distance(cursorPosition, ApplyAtlasScreenOffset(x.Element.GetClientRect()).Center))
+            .FirstOrDefault();
 
         if (closestNode == null)
             return null;
@@ -780,7 +813,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
 
     private Node GetClosestNodeToCenterScreen() {
-        var closestNode = AtlasPanel.Descriptions.OrderBy(x => Vector2.Distance(screenCenter, x.Element.GetClientRect().Center)).AsParallel().FirstOrDefault();
+        var closestNode = AtlasPanel.Descriptions
+            .OrderBy(x => Vector2.Distance(screenCenter, ApplyAtlasScreenOffset(x.Element.GetClientRect()).Center))
+            .FirstOrDefault();
         if (closestNode == null)
             return null;
         if (TryGetCachedNode(closestNode.Coordinate, out Node cachedNode))
@@ -880,7 +915,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         return false;
     }
 
-    private static bool TryGetNodeRect(Node? node, out RectangleF rect)
+    private bool TryGetNodeRect(Node? node, out RectangleF rect)
     {
         rect = default;
         try
@@ -888,13 +923,30 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             if (node?.MapNode?.Element == null)
                 return false;
 
-            rect = node.MapNode.Element.GetClientRect();
+            rect = ApplyAtlasScreenOffset(node.MapNode.Element.GetClientRect());
+
             return rect.Width > 1 && rect.Height > 1;
         }
         catch
         {
             return false;
         }
+    }
+
+    private RectangleF ApplyAtlasScreenOffset(RectangleF rect)
+    {
+        if (!Settings.Features.EnableAtlasOffsetCorrection.Value)
+            return rect;
+
+        float offsetX = Settings.Features.AtlasOffsetX.Value;
+        float offsetY = Settings.Features.AtlasOffsetY.Value;
+
+        return new RectangleF(
+            rect.X + offsetX,
+            rect.Y + offsetY,
+            rect.Width,
+            rect.Height
+        );
     }
 
     private int SafeAtlasDescriptionCount()
@@ -2055,7 +2107,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     public float GetDistanceToNode(Node cachedNode)
     {
-        return Vector2.Distance(screenCenter, cachedNode.MapNode.Element.GetClientRect().Center);
+        if (!TryGetNodeRect(cachedNode, out RectangleF nodeRect))
+            return float.MaxValue;
+
+        return Vector2.Distance(screenCenter, nodeRect.Center);
     }
 
     private float GetNormalizedWeight(float value)
@@ -2459,7 +2514,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (!Settings.Waypoints.ShowWaypoints || mapNode == null || !waypoint.Show)
             return;
 
-        RectangleF nodeRect = mapNode.Element.GetClientRect();
+        RectangleF nodeRect = ApplyAtlasScreenOffset(mapNode.Element.GetClientRect());
         if (!IsOnScreen(nodeRect.Center))
             return;
 
@@ -2520,7 +2575,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (!Settings.Waypoints.ShowWaypointArrows || mapNode == null)
             return;
 
-        Vector2 waypointPosition = mapNode.Element.GetClientRect().Center;
+        Vector2 waypointPosition = ApplyAtlasScreenOffset(mapNode.Element.GetClientRect()).Center;
 
         float distance = Vector2.Distance(screenCenter, waypointPosition);
 
