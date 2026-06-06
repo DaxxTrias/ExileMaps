@@ -94,6 +94,9 @@ public class HotkeySettings
     [Menu("Waypoint Panel Hotkey", "Default: /")]
     public HotkeyNode ToggleWaypointPanelHotkey { get; set; } = new HotkeyNode(Keys.End);
 
+    [Menu("Toggle Waypoints Hotkey", "Show/hide waypoints and their arrows")]
+    public HotkeyNode ToggleWaypointsHotkey { get; set; } = new HotkeyNode(Keys.F13);
+
     [Menu("Show Towers in Range Hotkey", "Default: '")]
     public HotkeyNode ShowTowerRangeHotkey { get; set; } = new HotkeyNode(Keys.PageUp);
 
@@ -112,8 +115,17 @@ public class HotkeySettings
     [Menu("Print Node Debug Data")]
     public HotkeyNode DebugKey { get; set; } = new HotkeyNode(Keys.F13);
 
+    [Menu("Toggle Debug Mode")]
+    public HotkeyNode ToggleDebugModeHotkey { get; set; } = new HotkeyNode(Keys.F13);
+
     [Menu("Update Map Type Data")]
     public HotkeyNode UpdateMapsKey { get; set; } = new HotkeyNode(Keys.F13);
+
+    [Menu("Update Content Type Data")]
+    public HotkeyNode UpdateContentKey { get; set; } = new HotkeyNode(Keys.F13);
+
+    [Menu("Update Biome Data")]
+    public HotkeyNode UpdateBiomesKey { get; set; } = new HotkeyNode(Keys.F13);
 }
 
 [Submenu(CollapsedByDefault = true)]
@@ -157,9 +169,14 @@ public class GraphicSettings
 
     [Menu("Content Radius", "Radius of the rings used to indicate map content")]
     public RangeNode<float> RingRadius { get; set; } = new RangeNode<float>(1f, 0, 10);
+
+    [Menu("Content Ring Icon Size", "Scale of the outline-circle icon used for content rings (icon mode only).")]
+    public RangeNode<float> ContentRingIconScale { get; set; } = new RangeNode<float>(1.0f, 0.3f, 3f);
     
     [Menu("Node Radius", "Radius of the circles used to highlight map nodes")]
     public RangeNode<float> NodeRadius { get; set; } = new RangeNode<float>(1.5f, 0, 10);
+    [Menu("Use Icons for Nodes", "Draw the per-map sprite icon for map nodes. Disable to use plain filled circles (the original look).")]
+    public ToggleNode UseNodeIcons { get; set; } = new ToggleNode(true);
     [Menu("Draw paths to waypoints", "Shows the shortest path from the nearest visited node to waypoints")]
     public ToggleNode ShowPaths { get; set; } = new ToggleNode(true);
 
@@ -168,6 +185,41 @@ public class GraphicSettings
 
     [Menu("Waypoint Line Width", "Width of the map waypoint lines")]
     public RangeNode<float> WaypointLineWidth { get; set; } = new RangeNode<float>(3.0f, 0, 10);
+
+    [Menu("Favorite Marker Color", "Color of the star marker drawn above favorite map nodes")]
+    public ColorNode FavoriteColor { get; set; } = new ColorNode(Color.FromArgb(255, 255, 215, 0));
+
+    [Menu("Favorite Marker Scale", "Size of the star marker drawn above favorite map nodes")]
+    public RangeNode<float> FavoriteIconScale { get; set; } = new RangeNode<float>(1.0f, 0, 3);
+
+    [Menu("Special Map Indicator", "Draw an icon above 'special' map nodes (wider node art) instead of a solid circle, so the map art isn't covered")]
+    public ToggleNode ShowSpecialMapIndicator { get; set; } = new ToggleNode(true);
+
+    [Menu("Special Map Marker Color", "Color of the icon drawn above special map nodes")]
+    public ColorNode SpecialMapColor { get; set; } = new ColorNode(Color.FromArgb(255, 200, 80, 255));
+
+    [Menu("Special Map Marker Scale", "Size of the icon drawn above special map nodes")]
+    public RangeNode<float> SpecialMapIconScale { get; set; } = new RangeNode<float>(1.0f, 0, 3);
+
+    // Sprite drawn above special map nodes. Persisted (Newtonsoft); edited via SpecialMapIconPicker.
+    public SpriteIcon SpecialMapIcon { get; set; } = SpriteIcon.Exclamation;
+
+    [JsonIgnore]
+    public CustomNode SpecialMapIconPicker { get; set; } = new CustomNode
+    {
+        DrawDelegate = () =>
+        {
+            ImGui.Text("Special Map Marker Icon");
+            ImGui.SameLine();
+            SettingsHelpers.IconPicker("specialmapicon", Main.Settings.Graphics.SpecialMapIcon, i => Main.Settings.Graphics.SpecialMapIcon = i);
+        }
+    };
+
+    [Menu("Special Map Name Color", "Map name text color for special maps (overrides weight-based coloring)")]
+    public ColorNode SpecialMapNameColor { get; set; } = new ColorNode(Color.FromArgb(255, 200, 80, 255));
+
+    [Menu("Lay Icons Flat", "Vertically squash node icons so round sprites read as flat discs lying on the tilted atlas plane. 0 = upright. Tune by eye.")]
+    public RangeNode<float> IconFlatten { get; set; } = new RangeNode<float>(0.180f, 0f, 0.9f);
 }
 
 [Submenu(CollapsedByDefault = true)]
@@ -239,30 +291,12 @@ public class MapSettings
                     ImGui.TableNextRow();
 
                     ImGui.TableNextColumn();
-                    bool weightedColors = ColorNodesByWeight;
-                    if(ImGui.Checkbox($"##weighted_colors", ref weightedColors))                        
-                        ColorNodesByWeight = weightedColors;
-
-                    ImGui.TableNextColumn();
-                    ImGui.Text("Color Map Nodes by Weight");                          
-                    ImGui.TableNextRow();
-
-                    ImGui.TableNextColumn();
                     bool useNameColors = UseColorsForMapNames;
                     if(ImGui.Checkbox($"##usenamecolors", ref useNameColors))                        
                         UseColorsForMapNames = useNameColors;
 
                     ImGui.TableNextColumn();
                     ImGui.Text("Use Map Colors for Map Names");
-                    ImGui.TableNextRow();
-
-                    ImGui.TableNextColumn();
-                    bool useWeightColors = UseWeightColorsForMapNames;
-                    if(ImGui.Checkbox($"##useweightcolors", ref useWeightColors))                        
-                        UseWeightColorsForMapNames = useWeightColors;
-
-                    ImGui.TableNextColumn();
-                    ImGui.Text("Use Weight Colors for Map Names");
                     ImGui.TableNextRow();
 
                     ImGui.TableNextColumn();
@@ -310,23 +344,76 @@ public class MapSettings
 
             ImGui.Separator();
             ImGui.TextWrapped("CTRL+Click on a slider to manually enter a value.");
-            
-            if (ImGui.BeginTable("maps_table", 7, ImGuiTableFlags.SizingFixedFit|ImGuiTableFlags.Borders|ImGuiTableFlags.PadOuterX))
+
+            // Search filter for the map list.
+            string filter = mapSearchFilter;
+            ImGui.SetNextItemWidth(250);
+            if (ImGui.InputTextWithHint("##mapsearch", "Search maps...", ref filter, 100))
+                mapSearchFilter = filter;
+            ImGui.SameLine();
+            if (ImGui.Button("Clear##mapsearchclear"))
+                mapSearchFilter = "";
+
+            if (ImGui.BeginTable("maps_table", 11, ImGuiTableFlags.SizingFixedFit|ImGuiTableFlags.Borders|ImGuiTableFlags.PadOuterX))
             {
 
-                ImGui.TableSetupColumn("Map", ImGuiTableColumnFlags.WidthFixed, 250);                                                              
-                ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 100); 
-                ImGui.TableSetupColumn("Node", ImGuiTableColumnFlags.WidthFixed, 30);     
-                ImGui.TableSetupColumn("Text", ImGuiTableColumnFlags.WidthFixed, 30);               
+                ImGui.TableSetupColumn("Map", ImGuiTableColumnFlags.WidthFixed, 250);
+                ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 100);
+                ImGui.TableSetupColumn("Node", ImGuiTableColumnFlags.WidthFixed, 30);
+                ImGui.TableSetupColumn("Text", ImGuiTableColumnFlags.WidthFixed, 30);
                 ImGui.TableSetupColumn("Text BG", ImGuiTableColumnFlags.WidthFixed, 30);
-                ImGui.TableSetupColumn("Line", ImGuiTableColumnFlags.WidthFixed, 30);                              
-                ImGui.TableSetupColumn("Biomes", ImGuiTableColumnFlags.WidthStretch, 200);   
+                ImGui.TableSetupColumn("Line", ImGuiTableColumnFlags.WidthFixed, 30);
+                ImGui.TableSetupColumn("Fav", ImGuiTableColumnFlags.WidthFixed, 30);
+                ImGui.TableSetupColumn("Wgt Clr", ImGuiTableColumnFlags.WidthFixed, 30);
+                ImGui.TableSetupColumn("Name Wgt", ImGuiTableColumnFlags.WidthFixed, 30);
+                ImGui.TableSetupColumn("Icon", ImGuiTableColumnFlags.WidthFixed, 30);
+                ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch, 200);
                 ImGui.TableHeadersRow();
-                
-                if (Maps.Count == 0)   
+
+                if (Maps.Count == 0)
                     Main.LoadDefaultMaps();
-                
-                foreach (var (key,map) in Maps.OrderBy(x => x.Value.Name))
+
+                var visibleMaps = Maps
+                    .Where(x => !MapIsUnused(x.Key, x.Value))
+                    .Where(x => string.IsNullOrEmpty(mapSearchFilter)
+                        || (x.Value.Name?.Contains(mapSearchFilter, StringComparison.OrdinalIgnoreCase) ?? false))
+                    .OrderBy(x => x.Value.Name)
+                    .ToList();
+                var visibleMapValues = visibleMaps.Select(x => x.Value).ToList();
+
+                // "Set/Toggle all" row: applies to every map currently shown (respects the search filter).
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.Text("Set all");
+                SettingsHelpers.ToggleAll("highlight", visibleMapValues, m => m.Highlight, (m, v) => m.Highlight = v);
+                ImGui.TableNextColumn(); // Weight (no bulk action)
+                ImGui.TableNextColumn();
+                SettingsHelpers.CenterControl(30f);
+                SettingsHelpers.SetAllColor("nodecolor", ref bulkNodeColor, visibleMapValues, (m, c) => m.NodeColor = c);
+                ImGui.TableNextColumn();
+                SettingsHelpers.CenterControl(30f);
+                SettingsHelpers.SetAllColor("namecolor", ref bulkNameColor, visibleMapValues, (m, c) => m.NameColor = c);
+                ImGui.TableNextColumn();
+                SettingsHelpers.CenterControl(30f);
+                SettingsHelpers.SetAllColor("bgcolor", ref bulkBgColor, visibleMapValues, (m, c) => m.BackgroundColor = c);
+                ImGui.TableNextColumn();
+                SettingsHelpers.CenterControl(30f);
+                SettingsHelpers.ToggleAll("line", visibleMapValues, m => m.DrawLine, (m, v) => m.DrawLine = v);
+                ImGui.TableNextColumn();
+                SettingsHelpers.CenterControl(30f);
+                SettingsHelpers.ToggleAll("favorite", visibleMapValues, m => m.Favorite, (m, v) => m.Favorite = v);
+                ImGui.TableNextColumn();
+                SettingsHelpers.CenterControl(30f);
+                SettingsHelpers.ToggleAll("colorbyweight", visibleMapValues, m => m.ColorNodesByWeight, (m, v) => m.ColorNodesByWeight = v);
+                ImGui.TableNextColumn();
+                SettingsHelpers.CenterControl(30f);
+                SettingsHelpers.ToggleAll("namebyweight", visibleMapValues, m => m.UseWeightColorForName, (m, v) => m.UseWeightColorForName = v);
+                ImGui.TableNextColumn();
+                SettingsHelpers.CenterControl(30f);
+                SettingsHelpers.SetAllIcon("setallicon", ref bulkIcon, visibleMapValues, (m, i) => m.Icon = i);
+                ImGui.TableNextColumn(); // spacer
+
+                foreach (var (key,map) in visibleMaps)
                 {
                     ImGui.PushID($"Map_{key}");
                     ImGui.TableNextRow();
@@ -375,19 +462,73 @@ public class MapSettings
                     SettingsHelpers.CenterControl(30f);
                     bool drawLine = map.DrawLine;
                     if(ImGui.Checkbox($"##{key}_line", ref drawLine))
-                        map.DrawLine = drawLine;    
-                    
-                    // Biomes
+                        map.DrawLine = drawLine;
+
+                    // Favorite
                     ImGui.TableNextColumn();
-                    ImGui.Text(map.BiomesToString() ?? "None");
+                    SettingsHelpers.CenterControl(30f);
+                    bool favorite = map.Favorite;
+                    if(ImGui.Checkbox($"##{key}_favorite", ref favorite))
+                        map.Favorite = favorite;
+
+                    // Color Nodes by Weight
+                    ImGui.TableNextColumn();
+                    SettingsHelpers.CenterControl(30f);
+                    bool colorByWeight = map.ColorNodesByWeight;
+                    if(ImGui.Checkbox($"##{key}_colorbyweight", ref colorByWeight))
+                        map.ColorNodesByWeight = colorByWeight;
+
+                    // Use Weight Color for Name
+                    ImGui.TableNextColumn();
+                    SettingsHelpers.CenterControl(30f);
+                    bool nameByWeight = map.UseWeightColorForName;
+                    if(ImGui.Checkbox($"##{key}_namebyweight", ref nameByWeight))
+                        map.UseWeightColorForName = nameByWeight;
+
+                    // Icon picker
+                    ImGui.TableNextColumn();
+                    SettingsHelpers.CenterControl(30f);
+                    SettingsHelpers.IconPicker($"{key}_icon", map.Icon, i => map.Icon = i);
+
+                    // Blank spacer column (was Biomes) so the fixed-width columns stay aligned.
+                    ImGui.TableNextColumn();
 
                     ImGui.PopID();
                 }                
             }
             ImGui.EndTable();
+
+            SettingsHelpers.DrawResetWeightsButton("maps", ref mapResetConfirm, () => {
+                foreach (var (_, m) in Maps)
+                    m.Weight = 0;
+            });
             }
         };
 
+    }
+
+    [JsonIgnore]
+    private string mapSearchFilter = "";
+    [JsonIgnore]
+    private bool mapResetConfirm = false;
+    // Backing values for the "set all" color pickers in the map table header.
+    [JsonIgnore]
+    private Vector4 bulkNodeColor = new(1, 1, 1, 1);
+    [JsonIgnore]
+    private Vector4 bulkNameColor = new(1, 1, 1, 1);
+    [JsonIgnore]
+    private Vector4 bulkBgColor = new(0, 0, 0, 1);
+    [JsonIgnore]
+    private SpriteIcon bulkIcon = SpriteIcon.Circle;
+
+    // Maps flagged DNT-UNUSED (in the name, key or any id) are dev/unused placeholders and are hidden.
+    private static bool MapIsUnused(string key, Map map) {
+        const string marker = "DNT-UNUSED";
+        if (key != null && key.Contains(marker))
+            return true;
+        if (map.Name != null && map.Name.Contains(marker))
+            return true;
+        return map.IDs != null && map.IDs.Any(id => id != null && id.Contains(marker));
     }
 
     [JsonIgnore]
@@ -401,16 +542,19 @@ public class MapSettings
     public CustomNode MapTable { get; set; }
 
     public bool HighlightMapNodes { get; set; } = true;
-    public bool ColorNodesByWeight { get; set; } = true;
     public bool DrawWeightOnMap { get; set; } = false;
     public bool ShowMapNames { get; set; } = true;
     public bool UseColorsForMapNames { get; set; } = true;
-    public bool UseWeightColorsForMapNames { get; set; } = true;
     public bool ShowMapNamesOnUnlockedNodes { get; set; } = true;
     public bool ShowMapNamesOnLockedNodes { get; set; } = true;
     public bool ShowMapNamesOnHiddenNodes { get; set; } = true;
     public Color GoodNodeColor { get; set; } = Color.FromArgb(200, 50, 255, 50);
     public Color BadNodeColor { get; set; } = Color.FromArgb(200, 255, 50, 50);
+
+    // Pixel offset applied to map name and weight text relative to the node center.
+    public RangeNode<int> MapNameOffsetX { get; set; } = new RangeNode<int>(0, -200, 200);
+    public RangeNode<int> MapNameOffsetY { get; set; } = new RangeNode<int>(25, -200, 200);
+
     public ObservableDictionary<string, Map> Maps { get; set; } = [];
 }
 
@@ -494,9 +638,17 @@ public class BiomeSettings
                     }
                 }
                 ImGui.EndTable();
+
+                SettingsHelpers.DrawResetWeightsButton("biomes", ref biomeResetConfirm, () => {
+                    foreach (var (_, b) in Biomes)
+                        b.Weight = 0;
+                });
             }
         };
     }
+
+    [JsonIgnore]
+    private bool biomeResetConfirm = false;
 }
 
 /// <summary>
@@ -563,22 +715,55 @@ public class ContentSettings
                 ImGui.TextWrapped("CTRL+Click on a slider to manually enter a value.");
                 ImGui.Spacing();
 
-                if (ImGui.BeginTable("content_table", 5, ImGuiTableFlags.Borders))
+                // Search filter for the content list.
+                string contentFilter = contentSearchFilter;
+                ImGui.SetNextItemWidth(250);
+                if (ImGui.InputTextWithHint("##contentsearch", "Search content...", ref contentFilter, 100))
+                    contentSearchFilter = contentFilter;
+                ImGui.SameLine();
+                if (ImGui.Button("Clear##contentsearchclear"))
+                    contentSearchFilter = "";
+
+                if (ImGui.BeginTable("content_table", 6, ImGuiTableFlags.Borders))
                 {
-                    ImGui.TableSetupColumn("Content Type", ImGuiTableColumnFlags.WidthFixed, 250);                                                               
-                    ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 100);     
+                    ImGui.TableSetupColumn("Content Type", ImGuiTableColumnFlags.WidthFixed, 250);
+                    ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 100);
                     ImGui.TableSetupColumn("Color", ImGuiTableColumnFlags.WidthFixed, 50);
-                    ImGui.TableSetupColumn("Ring", ImGuiTableColumnFlags.WidthFixed, 70); 
+                    ImGui.TableSetupColumn("Ring", ImGuiTableColumnFlags.WidthFixed, 70);
+                    ImGui.TableSetupColumn("Fav", ImGuiTableColumnFlags.WidthFixed, 30);
                     ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch, 50);
                     ImGui.TableHeadersRow();
 
-                    foreach (var (key,content) in ContentTypes.OrderBy(x => x.Value.Name))
+                    var visibleContent = ContentTypes
+                        .Where(x => string.IsNullOrEmpty(contentSearchFilter)
+                            || (x.Value.Name?.Contains(contentSearchFilter, StringComparison.OrdinalIgnoreCase) ?? false))
+                        .OrderBy(x => x.Value.Name)
+                        .ToList();
+                    var contentValues = visibleContent.Select(x => x.Value).ToList();
+
+                    // "Set/Toggle all" row applies to every content type currently shown (respects search).
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.Text("Set all");
+                    ImGui.TableNextColumn(); // Weight (no bulk action)
+                    ImGui.TableNextColumn();
+                    SettingsHelpers.CenterControl(30f);
+                    SettingsHelpers.SetAllColor("contentcolor", ref bulkContentColor, contentValues, (c, col) => c.Color = col);
+                    ImGui.TableNextColumn();
+                    SettingsHelpers.CenterControl(30f);
+                    SettingsHelpers.ToggleAll("contenthighlight", contentValues, c => c.Highlight, (c, v) => c.Highlight = v);
+                    ImGui.TableNextColumn();
+                    SettingsHelpers.CenterControl(30f);
+                    SettingsHelpers.ToggleAll("contentfavorite", contentValues, c => c.Favorite, (c, v) => c.Favorite = v);
+                    ImGui.TableNextColumn(); // spacer
+
+                    foreach (var (key,content) in visibleContent)
                     {
                         ImGui.PushID($"Content_{key}");
                         ImGui.TableNextRow();
 
                         ImGui.TableNextColumn();
-                        ImGui.Text(key);
+                        ImGui.Text(content.Name);
 
                         ImGui.TableNextColumn();
                         float weight = content.Weight;                        
@@ -595,18 +780,38 @@ public class ContentSettings
                         ImGui.TableNextColumn();
                         SettingsHelpers.CenterControl(30f);
                         bool highlight = content.Highlight;
-                        if(ImGui.Checkbox($"##{key}_highlight", ref highlight))                        
+                        if(ImGui.Checkbox($"##{key}_highlight", ref highlight))
                             content.Highlight = highlight;
-                        
+
+                        // Favorite
+                        ImGui.TableNextColumn();
+                        SettingsHelpers.CenterControl(30f);
+                        bool contentFavorite = content.Favorite;
+                        if(ImGui.Checkbox($"##{key}_favorite", ref contentFavorite))
+                            content.Favorite = contentFavorite;
+
                         ImGui.TableNextColumn();
 
                         ImGui.PopID();
                     }
                 }
                 ImGui.EndTable();
+
+                SettingsHelpers.DrawResetWeightsButton("content", ref contentResetConfirm, () => {
+                    foreach (var (_, c) in ContentTypes)
+                        c.Weight = 0;
+                });
             }
         };
     }
+
+    [JsonIgnore]
+    private bool contentResetConfirm = false;
+    [JsonIgnore]
+    private string contentSearchFilter = "";
+    // Backing value for the "set all" color picker in the content table header.
+    [JsonIgnore]
+    private Vector4 bulkContentColor = new(1, 1, 1, 1);
 }
 
 /// <summary>
@@ -786,9 +991,12 @@ public class WaypointSettings
     public bool ShowWaypoints { get; set; } = true;
     public bool ShowWaypointArrows { get; set; } = true;
     public bool InverWaypointArrowsColors { get; set; } = true;
+    public bool AutoWaypointFavorites { get; set; } = false;
 
     public int WaypointPanelMaxItems { get; set; } = 30;
+    public int WaypointPanelMaxSteps { get; set; } = 50; // 0 = unlimited
     public string WaypointPanelSortBy { get; set; } = "Weight";
+    public string WaypointPanelSortBy2 { get; set; } = "Steps";
     public bool WaypointsUseRegex { get; set; } = false;
     public bool ShowUnlockedOnly { get; set; } = false;
     
@@ -843,6 +1051,19 @@ public class WaypointSettings
 
                     ImGui.TableNextRow();
 
+                    // auto-create waypoints for favorite maps
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+
+                    bool _autoFavorites = AutoWaypointFavorites;
+                    if(ImGui.Checkbox($"##auto_waypoint_favorites", ref _autoFavorites))
+                        AutoWaypointFavorites = _autoFavorites;
+
+                    ImGui.TableNextColumn();
+                    ImGui.Text("Auto Create Waypoints for Favorite Maps");
+
+                    ImGui.TableNextRow();
+
                 }
                 ImGui.EndTable();
             }
@@ -851,9 +1072,104 @@ public class WaypointSettings
 }
 
 public static class SettingsHelpers {
+    /// <summary>
+    /// "Toggle all" checkbox for a table column. Reflects whether every item is currently on, and
+    /// clicking it sets the bound bool on every item to the new value.
+    /// </summary>
+    public static void ToggleAll<T>(string id, System.Collections.Generic.IEnumerable<T> items, Func<T,bool> get, Action<T,bool> set) {
+        var list = items as System.Collections.Generic.ICollection<T> ?? items.ToList();
+        bool all = list.Count > 0 && list.All(get);
+        if (ImGui.Checkbox($"##all_{id}", ref all))
+            foreach (var i in list) set(i, all);
+    }
+
+    /// <summary>
+    /// "Set all" color picker for a table column. Editing it applies the chosen color to every item.
+    /// The swatch value is caller-owned so it persists between frames.
+    /// </summary>
+    public static void SetAllColor<T>(string id, ref Vector4 value, System.Collections.Generic.IEnumerable<T> items, Action<T,Color> set) {
+        if (ImGui.ColorEdit4($"##setall_{id}", ref value, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs)) {
+            Color c = Color.FromArgb((int)(value.W * 255), (int)(value.X * 255), (int)(value.Y * 255), (int)(value.Z * 255));
+            foreach (var i in items) set(i, c);
+        }
+    }
+
     public static void CenterControl(float width) {
         float availableWidth = ImGui.GetContentRegionAvail().X;
         float cursorPosX = ImGui.GetCursorPosX() + (availableWidth - width) / 2.0f;
         ImGui.SetCursorPosX(cursorPosX);
-    }        
+    }
+
+    /// <summary>
+    /// Sprite icon picker. Shows the current icon as a small image button; clicking opens a popup
+    /// grid of all atlas sprites (laid out to match the atlas columns). Selecting one calls
+    /// <paramref name="set"/>. Falls back to plain numbered buttons if the atlas texture isn't loaded.
+    /// </summary>
+    public static void IconPicker(string id, SpriteIcon current, Action<SpriteIcon> set) {
+        IntPtr tex = Main.customIconsId;
+        string popupId = $"iconpick_{id}";
+        var white = new Vector4(1, 1, 1, 1);
+        var (cu0, cu1) = SpriteAtlas.GetUVPair(current);
+        if (tex != IntPtr.Zero) {
+            if (ImGui.ImageButton($"##btn_{id}", tex, new Vector2(20, 20), cu0, cu1, Vector4.Zero, white))
+                ImGui.OpenPopup(popupId);
+        } else {
+            if (ImGui.Button($"{(int)current}##{id}", new Vector2(24, 20)))
+                ImGui.OpenPopup(popupId);
+        }
+        if (ImGui.BeginPopup(popupId)) {
+            for (int i = 0; i < SpriteAtlas.Count; i++) {
+                var icon = (SpriteIcon)i;
+                var (u0, u1) = SpriteAtlas.GetUVPair(icon);
+                // Tint the current selection so it stands out in the grid.
+                bool isCurrent = icon == current;
+                if (isCurrent) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(1, 0, 1, 1));
+                bool clicked = tex != IntPtr.Zero
+                    ? ImGui.ImageButton($"##pick_{id}_{i}", tex, new Vector2(32, 32), u0, u1, Vector4.Zero, white)
+                    : ImGui.Button($"{i}##pick_{id}_{i}", new Vector2(36, 36));
+                if (isCurrent) ImGui.PopStyleColor();
+                if (clicked) { set(icon); ImGui.CloseCurrentPopup(); }
+                if (i % SpriteAtlas.Columns != SpriteAtlas.Columns - 1) ImGui.SameLine();
+            }
+            ImGui.EndPopup();
+        }
+    }
+
+    /// <summary>
+    /// "Set all" icon picker for a table column. Picking an icon applies it to every item.
+    /// The selection is caller-owned so it persists between frames.
+    /// </summary>
+    public static void SetAllIcon<T>(string id, ref SpriteIcon value, System.Collections.Generic.IEnumerable<T> items, Action<T,SpriteIcon> set) {
+        var captured = value;        // ref params can't be captured in the lambda
+        SpriteIcon chosen = captured;
+        IconPicker(id, captured, i => chosen = i);
+        if (chosen != captured) {
+            value = chosen;
+            foreach (var item in items) set(item, chosen);
+        }
+    }
+
+    /// <summary>
+    /// Draws a two-step "Reset All Weights" button. First click arms the confirm state; the second
+    /// (red) click runs <paramref name="reset"/>. A Cancel button disarms. State is held in the
+    /// caller-owned <paramref name="confirming"/> flag.
+    /// </summary>
+    public static void DrawResetWeightsButton(string id, ref bool confirming, Action reset) {
+        ImGui.Spacing();
+        if (!confirming) {
+            if (ImGui.Button($"Reset All Weights##{id}_reset"))
+                confirming = true;
+        } else {
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.7f, 0.1f, 0.1f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.85f, 0.15f, 0.15f, 1.0f));
+            if (ImGui.Button($"Are you sure? Click to confirm##{id}_confirm")) {
+                reset();
+                confirming = false;
+            }
+            ImGui.PopStyleColor(2);
+            ImGui.SameLine();
+            if (ImGui.Button($"Cancel##{id}_cancel"))
+                confirming = false;
+        }
+    }
 }
