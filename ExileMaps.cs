@@ -35,6 +35,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private const string defaultContentPath = "json\\content.json";
     private const string ArrowPath = "textures\\arrow.png";
     private const string IconsFile = "Icons.png";
+    // New custom sprite sheet for the plugin (drop the generated PNG in textures/). Loaded if present;
+    // grid layout (SpriteSheetCols x SpriteSheetRows) to be set once the sheet is finalized.
+    // Custom sprite atlas (SpriteAtlas): 1024x768, 8x6, 128px cells, 48 desaturated icons.
+    private const string CustomIconsPath = "textures\\Icons_Desaturated.png";
+    private const string CustomIconsName = SpriteAtlas.FileName;
     
     public IngameUIElements UI;
     public AtlasPanel AtlasPanel;
@@ -42,7 +47,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private Vector2 screenCenter;
     private List<Node> selectedNodes = [];
     private RectangleF cachedScreenRect;
-    private readonly List<RectangleF> cachedTooltipRects = [];
+    private readonly List<RectangleF> cachedExcludeRects = [];
     private Dictionary<Vector2i, Node> mapCache = [];
     public bool refreshCache = false;
     private int cacheTicks = 0;
@@ -60,6 +65,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     internal IntPtr iconsId;
     internal IntPtr arrowId;
+    internal IntPtr customIconsId;
+    private bool customIconsLoaded = false;
 
     private bool AtlasHasBeenClosed = true;
     private bool gameFilesScraped = false;
@@ -85,6 +92,15 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         iconsId = Graphics.GetTextureId(IconsFile);
         Graphics.InitImage("arrow.png", Path.Combine(DirectoryFullName, ArrowPath));
         arrowId = Graphics.GetTextureId("arrow.png");
+
+        // Load the custom sprite sheet if it's been added. Guarded so the plugin still runs before
+        // the PNG exists; once present, address sprites via GetSpriteUV(col, row).
+        var customIconsFull = Path.Combine(DirectoryFullName, CustomIconsPath);
+        if (File.Exists(customIconsFull)) {
+            Graphics.InitImage(CustomIconsName, customIconsFull);
+            customIconsId = Graphics.GetTextureId(CustomIconsName);
+            customIconsLoaded = true;
+        }
 
         CanUseMultiThreading = true;
 
@@ -210,6 +226,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 // 3. Rings
                 foreach (var (node, rect) in nodePositions)
                     DrawNodeRings(node, rect);
+                // 3b. Favorite star markers (above rings, below labels)
+                foreach (var (node, rect) in nodePositions)
+                    DrawFavoriteIndicator(node, rect);
+                // 3c. Special map markers (icon above the node instead of a covering fill)
+                foreach (var (node, rect) in nodePositions)
+                    DrawSpecialIndicator(node, rect);
                 // 4. Labels
                 foreach (var (node, rect) in nodePositions)
                     DrawNodeLabels(node, rect);
@@ -274,6 +296,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private void RegisterHotkeys() {
         RegisterHotkey(Settings.Keybinds.RefreshMapCacheHotkey);
         RegisterHotkey(Settings.Keybinds.DebugKey);
+        RegisterHotkey(Settings.Keybinds.ToggleDebugModeHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleWaypointPanelHotkey);
         RegisterHotkey(Settings.Keybinds.AddWaypointHotkey);
         RegisterHotkey(Settings.Keybinds.DeleteWaypointHotkey);
@@ -285,6 +308,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RegisterHotkey(Settings.Keybinds.ToggleUnlockedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleVisitedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleHiddenNodesHotkey);
+        RegisterHotkey(Settings.Keybinds.ToggleWaypointsHotkey);
     }
     
     private static void RegisterHotkey(HotkeyNode hotkey)
@@ -300,8 +324,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             RefreshMapCache();
         }
 
-        if (Settings.Keybinds.DebugKey.PressedOnce())        
+        if (Settings.Keybinds.DebugKey.PressedOnce())
             DoDebugging();
+
+        if (Settings.Keybinds.ToggleDebugModeHotkey.PressedOnce())
+            Settings.Features.DebugMode.Value = !Settings.Features.DebugMode.Value;
 
         if (Settings.Keybinds.UpdateMapsKey.PressedOnce())
             UpdateMapData();
@@ -333,6 +360,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         if (Settings.Keybinds.ToggleHiddenNodesHotkey.PressedOnce())
             Settings.Features.ProcessHiddenNodes.Value = !Settings.Features.ProcessHiddenNodes.Value;
+
+        if (Settings.Keybinds.ToggleWaypointsHotkey.PressedOnce()) {
+            bool show = !Settings.Waypoints.ShowWaypoints;
+            Settings.Waypoints.ShowWaypoints = show;
+            Settings.Waypoints.ShowWaypointArrows = show;
+        }
 
         if (Settings.Keybinds.ShowTowerRangeHotkey.PressedOnce()) {
             mapCache.TryGetValue(GetClosestNodeToCursor().Coordinates, out Node node);
@@ -474,20 +507,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     {
         try {
             var ringCount = 0;
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Breach");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Delirium");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Expedition");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Ritual");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Abyss");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Map Boss");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Anomaly Map Boss");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Powerful Map Boss");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Cleansed");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted Nexus");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Irradiated");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Unique Map");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Tower");
+            // Draw a ring for every content present on this node (was a hardcoded whitelist that
+            // silently dropped any content type not listed, e.g. "Power of Faith").
+            foreach (var contentName in cachedNode.Content.Keys)
+                ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, contentName);
         } catch (Exception e) {
             LogError("Error drawing node rings: " + e.Message + " - " + e.StackTrace);
         }
@@ -513,8 +536,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
 
     private void DrawDebugging(Node cachedNode) {
-        using (Graphics.SetTextScale(Settings.MapMods.MapModScale))
-            DrawCenteredTextWithBackground(cachedNode.DebugText(), cachedNode.MapNode.Element.GetClientRect().Center, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);
+        var rect = cachedNode.MapNode.Element.GetClientRect();
+        string debugText = cachedNode.DebugText() + $"Size: {rect.Width:0} x {rect.Height:0}\n";
+        using (Graphics.SetTextScale(1.0f))
+            DrawCenteredTextWithBackground(debugText, rect.Center, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);
 
     }
 
@@ -722,6 +747,41 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         return null; // No path found
     }
+
+    // Multi-source BFS seeded with every visited node at distance 0. Each unvisited node's value is
+    // the minimum number of steps to reach the explored region (same semantics as a waypoint's
+    // PathFromStart step count, but computed for the whole graph in a single O(V+E) pass so the
+    // atlas list can sort/display steps without a per-node BFS). Unreachable nodes are omitted.
+    private Dictionary<Vector2i, int> ComputeStepCounts()
+    {
+        var stepCounts = new Dictionary<Vector2i, int>();
+        var queue = new Queue<Node>();
+
+        lock (mapCacheLock)
+        {
+            foreach (var node in mapCache.Values.Where(x => x.IsVisited))
+            {
+                stepCounts[node.Coordinates] = 0;
+                queue.Enqueue(node);
+            }
+
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                int nextDist = stepCounts[current.Coordinates] + 1;
+                foreach (var neighbor in current.Neighbors.Values)
+                {
+                    if (neighbor == null || stepCounts.ContainsKey(neighbor.Coordinates))
+                        continue;
+                    stepCounts[neighbor.Coordinates] = nextDist;
+                    queue.Enqueue(neighbor);
+                }
+            }
+        }
+
+        return stepCounts;
+    }
+
     private Node FindClosestVisitedNode(Node waypointNode)
     {
         if (waypointNode == null)
@@ -802,6 +862,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RecalculateWeights();
         //LogMessage($"Max Map Weight: {maxMapWeight}, Min Map Weight: {minMapWeight}");
 
+        SyncFavoriteWaypoints();
         UpdateWaypointPaths();
 
         refreshingCache = false;
@@ -819,11 +880,14 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             var currentNode = waypoint.PathFromStart[i];
             var nextNode = waypoint.PathFromStart[i + 1];
 
-            if (currentNode == null || nextNode == null || !IsOnScreen(currentNode.MapNode.Element.GetClientRect().Center) || !IsOnScreen(nextNode.MapNode.Element.GetClientRect().Center))
+            if (currentNode == null || nextNode == null)
                 continue;
 
             Vector2 start = currentNode.MapNode.Element.GetClientRect().Center;
             Vector2 end = nextNode.MapNode.Element.GetClientRect().Center;
+
+            if (!IsLineVisible(start, end))
+                continue;
 
             // Draw path line with a different color/style to distinguish from regular connections
             Graphics.DrawLine(start, end, Settings.Graphics.WaypointLineWidth , Settings.Graphics.PathLineColor);
@@ -1048,7 +1112,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             
             var destinationPos = destinationNode.MapNode.Element.GetClientRect();
 
-            if (!IsOnScreen(destinationPos.Center) || !IsOnScreen(nodeCurrentPosition.Center))
+            if (!IsLineVisible(nodeCurrentPosition.Center, destinationPos.Center))
                 continue;
 
             if (Settings.Graphics.DrawGradientLines) {
@@ -1096,7 +1160,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return 0;
 
         float radius = (Count * Settings.Graphics.RingWidth) + 1 + ((nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 2 * Settings.Graphics.RingRadius);
-        Graphics.DrawCircle(nodeCurrentPosition.Center, radius, cachedContent.Color, Settings.Graphics.RingWidth, 32);
+        if (customIconsLoaded && Settings.Graphics.UseNodeIcons) {
+            // User-tunable scale (default 1.0 = original ring size).
+            float d = radius * 2f * Settings.Graphics.ContentRingIconScale;
+            DrawNodeSprite(nodeCurrentPosition.Center, d, d, SpriteIcon.CircleOutline, cachedContent.Color);
+        }
+        else
+            Graphics.DrawCircle(nodeCurrentPosition.Center, radius, cachedContent.Color, Settings.Graphics.RingWidth, 32);
 
         return 1;
     }
@@ -1132,6 +1202,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         position.X = Math.Clamp(position.X, labelSize.X, windowRect.Width - labelSize.X);
         position.Y = Math.Clamp(position.Y, labelSize.Y, windowRect.Height - labelSize.Y);
 
+        if (!IsLineVisible(position, nodeCurrentPosition.Center))
+            return;
+
         Graphics.DrawLine(position, nodeCurrentPosition.Center, Settings.Graphics.MapLineWidth, cachedNode.MapType.NodeColor);
 
         if (Settings.Features.DrawLineLabels) {
@@ -1150,10 +1223,93 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (!Settings.MapTypes.HighlightMapNodes || cachedNode.IsVisited || !cachedNode.MapType.Highlight)
             return;
             
+        // "Special" maps have wider node art. Skip the solid circle (it would cover the map art) —
+        // they get an icon drawn above the node by DrawSpecialIndicator instead.
+        if (Settings.Graphics.ShowSpecialMapIndicator && nodeCurrentPosition.Width > SpecialMapWidthThreshold)
+            return;
+
         var radius = (nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 4 * Settings.Graphics.NodeRadius;
         var weight = cachedNode.Weight;
-        Color color = Settings.MapTypes.ColorNodesByWeight ? ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, (weight - minMapWeight) / (maxMapWeight - minMapWeight)) : cachedNode.MapType.NodeColor;
-        Graphics.DrawCircleFilled(nodeCurrentPosition.Center, radius, color, 16);
+        Color color = cachedNode.MapType.ColorNodesByWeight ? ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, (weight - minMapWeight) / (maxMapWeight - minMapWeight)) : cachedNode.MapType.NodeColor;
+
+        if (customIconsLoaded && Settings.Graphics.UseNodeIcons) {
+            DrawNodeSprite(nodeCurrentPosition.Center, radius * 2f, radius * 2f, cachedNode.MapType.Icon, color);
+        } else {
+            Graphics.DrawCircleFilled(nodeCurrentPosition.Center, radius, color, 16);
+        }
+    }
+
+    // Atlas node art wider than this is a "special" map (e.g. unique/pinnacle layouts).
+    private const float SpecialMapWidthThreshold = 90f;
+
+    // Normalized UV RectangleF for a custom-atlas icon, adapting SpriteAtlas's corner-pair UVs to the
+    // RectangleF (x, y, w, h) form ExileCore's Graphics.DrawImage expects.
+    private static RectangleF GetSpriteUV(SpriteIcon icon)
+    {
+        var (uv0, uv1) = SpriteAtlas.GetUVPair(icon);
+        return new RectangleF(uv0.X, uv0.Y, uv1.X - uv0.X, uv1.Y - uv0.Y);
+    }
+
+    // True once the custom sprite atlas PNG has been found and loaded.
+    private bool CustomIconsAvailable => customIconsLoaded;
+
+    /// MARK: DrawNodeSprite
+    /// Draws a custom-atlas sprite centered at <paramref name="center"/>. IconFlatten vertically squashes
+    /// it (shorter dest rect) so a round sprite reads as a flat disc lying on the tilted atlas plane.
+    /// Uses Graphics.DrawImage so it layers like every other node draw (above lines, below labels/windows).
+    private void DrawNodeSprite(Vector2 center, float width, float height, SpriteIcon icon, Color color, bool allowFlatten = true)
+    {
+        float h = allowFlatten ? height * (1f - Settings.Graphics.IconFlatten) : height;
+        Graphics.DrawImage(CustomIconsName, new RectangleF(center.X - width / 2f, center.Y - h / 2f, width, h), GetSpriteUV(icon), color);
+    }
+
+    // Pixels above the node center to place the special-map icon (independent of node size).
+    private const float SpecialIconCenterOffset = 40f;
+
+    /// MARK: DrawSpecialIndicator
+    /// Draws an icon above "special" map nodes (wider node art) instead of covering them with a fill.
+    private void DrawSpecialIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!Settings.Graphics.ShowSpecialMapIndicator || !Settings.MapTypes.HighlightMapNodes ||
+                cachedNode.IsVisited || cachedNode.MapType == null || !cachedNode.MapType.Highlight ||
+                nodeCurrentPosition.Width <= SpecialMapWidthThreshold)
+                return;
+
+            Vector2 iconSize = new Vector2(48, 48) * Settings.Graphics.SpecialMapIconScale;
+
+            // Position above the node by a fixed offset from its center (independent of node size).
+            Vector2 iconPosition = nodeCurrentPosition.Center - new Vector2(iconSize.X / 2, SpecialIconCenterOffset + iconSize.Y / 2);
+
+            RectangleF iconRect = new RectangleF(iconPosition.X, iconPosition.Y, iconSize.X, iconSize.Y);
+            if (customIconsLoaded)
+                DrawNodeSprite(iconRect.Center, iconRect.Width, iconRect.Height, Settings.Graphics.SpecialMapIcon, Settings.Graphics.SpecialMapColor, allowFlatten: false);
+            else
+                Graphics.DrawImage(IconsFile, iconRect, SpriteHelper.GetUV(MapIconsIndex.LootFilterLargeWhiteHexagon), Settings.Graphics.SpecialMapColor);
+        } catch (Exception e) {
+            LogError("Error drawing special map indicator: " + e.Message);
+        }
+    }
+
+    /// MARK: DrawFavoriteIndicator
+    /// Draws a star icon above nodes whose map type is flagged as a favorite.
+    private void DrawFavoriteIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!cachedNode.IsFavorited || cachedNode.IsVisited)
+                return;
+
+            Vector2 iconSize = new Vector2(48, 48) * Settings.Graphics.FavoriteIconScale;
+
+            // Position above the node (mirrors the waypoint icon offset).
+            Vector2 iconPosition = nodeCurrentPosition.Center - new Vector2(0, nodeCurrentPosition.Height / 2 + 20);
+            iconPosition -= new Vector2(iconSize.X / 2, iconSize.Y);
+
+            RectangleF iconRect = new RectangleF(iconPosition.X, iconPosition.Y, iconSize.X, iconSize.Y);
+            Graphics.DrawImage(IconsFile, iconRect, SpriteHelper.GetUV(MapIconsIndex.LootFilterLargeWhiteStar), Settings.Graphics.FavoriteColor);
+        } catch (Exception e) {
+            LogError("Error drawing favorite indicator: " + e.Message);
+        }
     }
 
     //DrawMapNode
@@ -1170,7 +1326,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
 
         float offsetX = Settings.MapTypes.ShowMapNames ? (Graphics.MeasureText(cachedNode.Name.ToUpper()).X / 2) + 30 : 50;
-        Vector2 position = new(nodeCurrentPosition.Center.X + offsetX, nodeCurrentPosition.Center.Y);
+        Vector2 position = new(nodeCurrentPosition.Center.X + offsetX + Settings.MapTypes.MapNameOffsetX, nodeCurrentPosition.Center.Y + Settings.MapTypes.MapNameOffsetY);
 
         DrawCenteredTextWithBackground($"{(int)(weight*100)}%", position, ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight), Settings.Graphics.BackgroundColor, true, 10, 3);
     }
@@ -1189,13 +1345,25 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         Color fontColor = Settings.MapTypes.UseColorsForMapNames ? cachedNode.MapType.NameColor : Settings.Graphics.FontColor;
         Color backgroundColor = Settings.MapTypes.UseColorsForMapNames ? cachedNode.MapType.BackgroundColor : Settings.Graphics.BackgroundColor;
-        
-        if (Settings.MapTypes.UseWeightColorsForMapNames) {
+
+        bool isSpecial = nodeCurrentPosition.Width > SpecialMapWidthThreshold;
+
+        if (isSpecial) {
+            // Special maps get their own customizable name color (never weight-based).
+            fontColor = Settings.Graphics.SpecialMapNameColor;
+        } else if (cachedNode.MapType.UseWeightColorForName) {
             float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
             fontColor = ColorUtils.InterpolateColor(Settings.MapTypes.BadNodeColor, Settings.MapTypes.GoodNodeColor, weight);
         }
 
-        DrawCenteredTextWithBackground(cachedNode.Name.ToUpper(), nodeCurrentPosition.Center, fontColor, backgroundColor, true, 10, 3);
+        // Name text is always fully opaque regardless of the configured/weight color's alpha.
+        fontColor = Color.FromArgb(255, fontColor.R, fontColor.G, fontColor.B);
+
+        Vector2 namePosition = nodeCurrentPosition.Center + new Vector2(Settings.MapTypes.MapNameOffsetX, Settings.MapTypes.MapNameOffsetY);
+
+        // Special maps render their name 20% larger.
+        using (Graphics.SetTextScale(isSpecial ? 1.2f : 1.0f))
+            DrawCenteredTextWithBackground(cachedNode.Name.ToUpper(), namePosition, fontColor, backgroundColor, true, 10, 3);
     }
 
     private void DrawTowerMods(Node cachedNode, RectangleF nodeCurrentPosition)
@@ -1496,8 +1664,35 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
     #region Helper Functions
 
-    // Map tooltip can live under WorldMap child 13 or 14; checked in IsOnScreen.
-    private static readonly int[] TooltipChildIndices = { 13, 14 };
+    // Map tooltip is a WorldMap child identified by its popup texture; checked in IsOnScreen.
+    // Matches any AtlasScreen "*Popup*" texture (e.g. AtlasMapNodePopup / AtlasMapNodePopupSelected).
+    private const string TooltipTexturePrefix = "Art/Textures/Interface/2D/2DArt/UIImages/InGame/AtlasScreen/";
+    private static bool IsTooltipTexture(string textureName) =>
+        textureName != null && textureName.StartsWith(TooltipTexturePrefix) && textureName.Contains("Popup");
+
+    // Static atlas UI textures we never want to draw the overlay over (title bar, search box bg).
+    // Matched by exact texture name anywhere under the WorldMap element tree.
+    private static readonly HashSet<string> ExcludeTextureNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/WorldMap/WorldmapTitleBar.dds",
+        "Art/Textures/Interface/2D/2DArt/UIImages/Common/AtlasSearchBg.dds",
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/MapPinsWindow/MapPinLegendBG.dds",
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/MapLegend/LegendBg.dds",
+    };
+
+    // Recursively adds the client rect of any visible descendant whose texture is in
+    // ExcludeTextureNames. Depth-limited so a malformed/deep tree can't stall the frame.
+    private void AddExcludeRectsByTexture(ExileCore2.PoEMemory.Element element, int depth)
+    {
+        if (element == null || depth > 8 || !element.IsVisible)
+            return;
+
+        if (element.TextureName != null && ExcludeTextureNames.Contains(element.TextureName))
+            cachedExcludeRects.Add(element.GetClientRect());
+
+        foreach (var child in element.Children)
+            AddExcludeRectsByTexture(child, depth + 1);
+    }
 
     // Recomputes the on-screen rect and any visible map-tooltip rects once per render frame.
     // IsOnScreen then reads these cached values instead of re-reading panel/tooltip game memory
@@ -1517,32 +1712,95 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
             cachedScreenRect = new RectangleF(left, 0, right - left, size.Y);
 
-            // Don't render over the map tooltip. It can live under child 13 or 14;
-            // child 14 doesn't always exist, so each lookup is null-guarded.
-            cachedTooltipRects.Clear();
-            foreach (var tooltipIndex in TooltipChildIndices) {
-                var tooltip = UI.WorldMap.GetChildAtIndex(tooltipIndex);
+            // Don't render over the map tooltip. Its child index varies, so identify it
+            // by its popup texture (selected/unselected) instead of a fixed position.
+            cachedExcludeRects.Clear();
+            foreach (var tooltip in UI.WorldMap.Children) {
                 if (tooltip == null || !tooltip.IsVisible)
+                    continue;
+                if (!IsTooltipTexture(tooltip.TextureName))
                     continue;
 
                 RectangleF mapTooltip = tooltip.GetClientRect();
                 mapTooltip.Inflate(mapTooltip.Width * 0.1f, mapTooltip.Height * 0.1f);
-                cachedTooltipRects.Add(mapTooltip);
+                cachedExcludeRects.Add(mapTooltip);
             }
+
+            // Don't render over the atlas title bar / search box background.
+            AddExcludeRectsByTexture(UI.WorldMap, 0);
+
+            // Don't render over the fixed HUD elements (life/mana orbs, flask panel, skill bar).
+            AddExcludeRect(UI.GameUI?.LifeOrb);
+            AddExcludeRect(UI.GameUI?.ManaOrb);
+            AddExcludeRect(UI.GameUI?.FlaskPanel?.Parent);
+            AddExcludeRect(UI.SkillBar?.Parent);
         } catch (Exception e) {
             // Keep last good bounds on a failed memory read rather than blanking the overlay.
             LogError("Error updating screen bounds: " + e.Message);
         }
     }
 
+    // Adds a visible element's client rect to the no-draw set. Null/invisible elements are skipped.
+    private void AddExcludeRect(ExileCore2.PoEMemory.Element element)
+    {
+        if (element == null || !element.IsVisible)
+            return;
+        cachedExcludeRects.Add(element.GetClientRect());
+    }
+
     private bool IsOnScreen(Vector2 position)
     {
-        foreach (var tooltip in cachedTooltipRects)
+        foreach (var tooltip in cachedExcludeRects)
             if (tooltip.Contains(position))
                 return false;
 
         return cachedScreenRect.Contains(position);
     }
+
+    // A line is drawable only if both endpoints are on screen AND the segment doesn't
+    // pass through a tooltip rect (a line can clear both endpoint checks yet still cross
+    // the tooltip between them).
+    private bool IsLineVisible(Vector2 start, Vector2 end)
+    {
+        if (!IsOnScreen(start) || !IsOnScreen(end))
+            return false;
+
+        foreach (var tooltip in cachedExcludeRects)
+            if (SegmentIntersectsRect(start, end, tooltip))
+                return false;
+
+        return true;
+    }
+
+    // Segment vs axis-aligned rect. Endpoints are already known outside the rect (IsOnScreen
+    // rejects points inside a tooltip), so test the segment against the four edges.
+    private static bool SegmentIntersectsRect(Vector2 a, Vector2 b, RectangleF rect)
+    {
+        Vector2 tl = new(rect.Left, rect.Top);
+        Vector2 tr = new(rect.Right, rect.Top);
+        Vector2 br = new(rect.Right, rect.Bottom);
+        Vector2 bl = new(rect.Left, rect.Bottom);
+
+        return SegmentsIntersect(a, b, tl, tr) ||
+               SegmentsIntersect(a, b, tr, br) ||
+               SegmentsIntersect(a, b, br, bl) ||
+               SegmentsIntersect(a, b, bl, tl);
+    }
+
+    private static bool SegmentsIntersect(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4)
+    {
+        float d1 = Cross(p3, p4, p1);
+        float d2 = Cross(p3, p4, p2);
+        float d3 = Cross(p1, p2, p3);
+        float d4 = Cross(p1, p2, p4);
+
+        return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+               ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+    }
+
+    // Cross product of (b - a) x (c - a); sign tells which side of line ab point c is on.
+    private static float Cross(Vector2 a, Vector2 b, Vector2 c)
+        => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
 
     public float GetDistanceToNode(Node cachedNode)
     {
@@ -1713,12 +1971,34 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             string sortBy = Settings.Waypoints.WaypointPanelSortBy;
             if (ImGui.BeginCombo("##sortByCombo", sortBy))
             {
-                if (ImGui.Selectable("Name", sortBy == "Name")) 
-                    sortBy = "Name";         
-                if (ImGui.Selectable("Weight", sortBy == "Weight")) 
-                    sortBy = "Weight";                    
-       
+                if (ImGui.Selectable("Name", sortBy == "Name"))
+                    sortBy = "Name";
+                if (ImGui.Selectable("Weight", sortBy == "Weight"))
+                    sortBy = "Weight";
+                if (ImGui.Selectable("Steps", sortBy == "Steps"))
+                    sortBy = "Steps";
+
                 Settings.Waypoints.WaypointPanelSortBy = sortBy;
+                ImGui.EndCombo();
+            }
+
+            ImGui.SameLine();
+            ImGui.Text("then ");
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(100);
+            string sortBy2 = Settings.Waypoints.WaypointPanelSortBy2;
+            if (ImGui.BeginCombo("##sortByCombo2", sortBy2))
+            {
+                if (ImGui.Selectable("None", sortBy2 == "None"))
+                    sortBy2 = "None";
+                if (ImGui.Selectable("Name", sortBy2 == "Name"))
+                    sortBy2 = "Name";
+                if (ImGui.Selectable("Weight", sortBy2 == "Weight"))
+                    sortBy2 = "Weight";
+                if (ImGui.Selectable("Steps", sortBy2 == "Steps"))
+                    sortBy2 = "Steps";
+
+                Settings.Waypoints.WaypointPanelSortBy2 = sortBy2;
                 ImGui.EndCombo();
             }
 
@@ -1731,15 +2011,20 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             int maxItems = Settings.Waypoints.WaypointPanelMaxItems;
             ImGui.SetNextItemWidth(100);
             if (ImGui.InputInt("##maxItems", ref maxItems))
-                Settings.Waypoints.WaypointPanelMaxItems = maxItems; 
+                Settings.Waypoints.WaypointPanelMaxItems = maxItems;
 
             ImGui.SameLine();
             ImGui.Spacing();
             ImGui.SameLine();
 
-            bool unlockedOnly = Settings.Waypoints.ShowUnlockedOnly;
-            if (ImGui.Checkbox("Show Unlocked Maps Only", ref unlockedOnly))
-                Settings.Waypoints.ShowUnlockedOnly = unlockedOnly;
+            ImGui.Text("Max Steps:");
+            ImGui.SameLine();
+            int maxSteps = Settings.Waypoints.WaypointPanelMaxSteps;
+            ImGui.SetNextItemWidth(100);
+            if (ImGui.InputInt("##maxSteps", ref maxSteps))
+                Settings.Waypoints.WaypointPanelMaxSteps = Math.Max(0, maxSteps);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Only show maps within this many steps of the explored region. 0 = unlimited.");
 
             ImGui.Separator();
 
@@ -1764,7 +2049,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             
             ImGui.Separator();
         
-            var tempCache = mapCache.Where(x => !x.Value.IsVisited && (!Settings.Waypoints.ShowUnlockedOnly || x.Value.IsUnlocked)).AsParallel().ToDictionary(x => x.Key, x => x.Value);    
+            var tempCache = mapCache.Where(x => !x.Value.IsVisited).AsParallel().ToDictionary(x => x.Key, x => x.Value);
             // if search isnt blank
             if (!string.IsNullOrEmpty(Settings.Waypoints.WaypointPanelFilter)) {
                 if (useRegex) {
@@ -1774,13 +2059,32 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 }
             }
 
-            tempCache = sortBy switch
+            // Step counts (steps from the explored region) for every reachable node, computed once.
+            // Used for both the Steps sort options and the Steps column display below.
+            var stepCounts = ComputeStepCounts();
+            int GetSteps(Node n) => stepCounts.TryGetValue(n.Coordinates, out var s) ? s : int.MaxValue;
+
+            // Limit to maps within N steps of the explored region (0 = unlimited).
+            int maxStepsFilter = Settings.Waypoints.WaypointPanelMaxSteps;
+            if (maxStepsFilter > 0)
+                tempCache = tempCache.Where(x => GetSteps(x.Value) <= maxStepsFilter).ToDictionary(x => x.Key, x => x.Value);
+
+            // Two-level sort: primary, then optional secondary tiebreak. Lets the user e.g. sort by
+            // Weight (desc) then Steps (asc) to surface the highest-weight map with the fewest steps.
+            var ordered = sortBy switch
             {
-                "Name" => tempCache.OrderBy(x => x.Value.Name).ToDictionary(x => x.Key, x => x.Value),
-                "Weight" => tempCache.OrderByDescending(x => x.Value.Weight).ToDictionary(x => x.Key, x => x.Value),
-                _ => tempCache.OrderByDescending(x => x.Value.Weight).ToDictionary(x => x.Key, x => x.Value),
+                "Name" => tempCache.OrderBy(x => x.Value.Name),
+                "Steps" => tempCache.OrderBy(x => GetSteps(x.Value)),
+                _ => tempCache.OrderByDescending(x => x.Value.Weight),
             };
-            tempCache = tempCache.Take(maxItems).ToDictionary(x => x.Key, x => x.Value);
+            ordered = sortBy2 switch
+            {
+                "Name" => ordered.ThenBy(x => x.Value.Name),
+                "Weight" => ordered.ThenByDescending(x => x.Value.Weight),
+                "Steps" => ordered.ThenBy(x => GetSteps(x.Value)),
+                _ => ordered,
+            };
+            tempCache = ordered.Take(maxItems).ToDictionary(x => x.Key, x => x.Value);
 
             var flags = ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable | ImGuiTableFlags.Hideable | ImGuiTableFlags.NoSavedSettings;
             ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(2, 2)); // Adjust the padding values as needed
@@ -1788,7 +2092,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             if (ImGui.BeginTable("atlas_list_table", 8, flags))//, new Vector2(-1, panelSize.Y/3)))
             {                                                            
                 ImGui.TableSetupColumn("Map Name", ImGuiTableColumnFlags.WidthFixed, 200);   
-                ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthFixed, 60);     
+                ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthFixed, 110);
                 ImGui.TableSetupColumn("Modifiers", ImGuiTableColumnFlags.WidthFixed, 100);
                 ImGui.TableSetupColumn("Steps", ImGuiTableColumnFlags.WidthFixed, 50);
                 ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 80);
@@ -1809,20 +2113,19 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         ImGui.TableNextColumn();
                         ImGui.TextUnformatted(node.Name);
 
-                        ImGui.SetWindowFontScale(0.7f);            
-
-                        // Content
+                        // Content — kept near full size; 0.7 was unreadable.
+                        ImGui.SetWindowFontScale(0.9f);
                         ImGui.TableNextColumn();
                         foreach(var (k,content) in node.Content) {
-                            _color = Settings.MapContent.ContentTypes[content.Name].Color;
+                            _color = content.Color;
                             _colorVector = new Vector4(_color.R / 255.0f, _color.G / 255.0f, _color.B / 255.0f, _color.A / 255.0f);
                             ImGui.PushStyleColor(ImGuiCol.Text, _colorVector);
                             ImGui.TextUnformatted(content.Name);
                             ImGui.PopStyleColor();
                         }
-                        
 
                         // Modifiers
+                        ImGui.SetWindowFontScale(0.7f);
                         ImGui.TableNextColumn();
                         foreach(var effect in node.Effects) {       
                             _color = Settings.MapMods.MapModTypes[effect.Key].Color;
@@ -1833,35 +2136,22 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         }
                         // reset font size
                         ImGui.SetWindowFontScale(1.0f);
-                        // Steps
+                        // Steps — graph distance from the explored region (see ComputeStepCounts),
+                        // shown for every node so it stays consistent with the Steps sort options.
                         ImGui.TableNextColumn();
-                        string stepsText = "-";
-
-                        // Instead of checking node.IsWaypoint, check if the node exists in the waypoints dictionary
-                        string waypointKey = node.Coordinates.ToString();
-                        if (Settings.Waypoints.Waypoints.TryGetValue(waypointKey, out Waypoint waypoint))
+                        int steps = GetSteps(node);
+                        if (steps >= 0 && steps != int.MaxValue)
                         {
-                            // We found a waypoint for this node
-                            if (waypoint.PathFromStart != null && waypoint.PathFromStart.Count > 0)
-                            {
-                                int steps = waypoint.PathFromStart.Count - 1;
-                                stepsText = steps.ToString();
-
-                                // Optionally color-code based on distance
-                                Color stepsColor = steps <= 3 ? Color.Green : (steps <= 7 ? Color.Yellow : Color.Red);
-                                Vector4 stepsColorVector = new Vector4(stepsColor.R / 255.0f, stepsColor.G / 255.0f, stepsColor.B / 255.0f, stepsColor.A / 255.0f);
-                                ImGui.PushStyleColor(ImGuiCol.Text, stepsColorVector);
-                                ImGui.TextUnformatted(stepsText);
-                                ImGui.PopStyleColor();
-                            }
-                            else
-                            {
-                                ImGui.TextUnformatted(stepsText);
-                            }
+                            // Color-code based on distance
+                            Color stepsColor = steps <= 3 ? Color.Green : (steps <= 7 ? Color.Yellow : Color.Red);
+                            Vector4 stepsColorVector = new Vector4(stepsColor.R / 255.0f, stepsColor.G / 255.0f, stepsColor.B / 255.0f, stepsColor.A / 255.0f);
+                            ImGui.PushStyleColor(ImGuiCol.Text, stepsColorVector);
+                            ImGui.TextUnformatted(steps.ToString());
+                            ImGui.PopStyleColor();
                         }
                         else
                         {
-                            ImGui.TextUnformatted(stepsText);
+                            ImGui.TextUnformatted("-");
                         }
                         // Weight
                         ImGui.TableNextColumn();
@@ -1961,6 +2251,51 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         Settings.Waypoints.Waypoints.Add(cachedNode.Coordinates.ToString(), newWaypoint);
         UpdateWaypointPaths();
+    }
+
+    /// MARK: SyncFavoriteWaypoints
+    /// Keeps auto-created waypoints in sync with favorite map types. Adds waypoints for favorite,
+    /// non-visited nodes and removes auto-created waypoints whose map is no longer a favorite (or
+    /// removes all auto-created waypoints when the feature is disabled). Manual waypoints
+    /// (AutoCreated == false) are never touched. Does not call UpdateWaypointPaths — the caller
+    /// (RefreshMapCache) does that once after this returns.
+    private void SyncFavoriteWaypoints() {
+        try {
+            // Snapshot favorite, non-visited nodes under the lock (background job mutates mapCache).
+            Dictionary<string, Node> favorites;
+            lock (mapCacheLock)
+                favorites = mapCache.Values
+                    .Where(x => x.IsFavorited && !x.IsVisited)
+                    .GroupBy(x => x.Coordinates.ToString())
+                    .ToDictionary(g => g.Key, g => g.First());
+
+            if (!Settings.Waypoints.AutoWaypointFavorites) {
+                // Feature off: clean up everything we auto-created.
+                foreach (var key in Settings.Waypoints.Waypoints.Where(x => x.Value.AutoCreated).Select(x => x.Key).ToList())
+                    Settings.Waypoints.Waypoints.Remove(key);
+                return;
+            }
+
+            // Add waypoints for favorites that don't have one yet.
+            foreach (var (key, node) in favorites) {
+                if (Settings.Waypoints.Waypoints.ContainsKey(key))
+                    continue;
+
+                Waypoint newWaypoint = node.ToWaypoint();
+                newWaypoint.Icon = MapIconsIndex.LootFilterLargeWhiteUpsideDownHouse;
+                newWaypoint.Color = Settings.Graphics.PathLineColor;
+                newWaypoint.AutoCreated = true;
+                Settings.Waypoints.Waypoints.Add(key, newWaypoint);
+            }
+
+            // Remove auto-created waypoints whose map is no longer a favorite.
+            foreach (var key in Settings.Waypoints.Waypoints
+                .Where(x => x.Value.AutoCreated && !favorites.ContainsKey(x.Key))
+                .Select(x => x.Key).ToList())
+                Settings.Waypoints.Waypoints.Remove(key);
+        } catch (Exception e) {
+            LogError("Error syncing favorite waypoints: " + e.Message);
+        }
     }
 
     private void RemoveWaypoint(Node cachedNode) {

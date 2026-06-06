@@ -30,6 +30,9 @@ public class Node
     public bool IsAttempted => !IsUnlocked && IsVisited;
     [JsonIgnore]
     public bool IsTower => MapType.IsTower();
+    // Favorited if the map type is a favorite, or any content present on the node is favorited.
+    [JsonIgnore]
+    public bool IsFavorited => (MapType?.Favorite ?? false) || Content.Values.Any(c => c.Favorite);
     [JsonIgnore]
     public List<Vector2i> NeighborCoordinates { get; set; } = [];
     [JsonIgnore]

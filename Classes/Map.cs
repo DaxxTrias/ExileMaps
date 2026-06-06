@@ -13,6 +13,9 @@ namespace ExileMaps.Classes
         private Color nodeColor = Color.FromArgb(200, 155, 155, 155);
         private bool drawLine = false;
         private bool highlight = true;
+        private bool colorNodesByWeight = true;
+        private bool useWeightColorForName = true;
+        private bool favorite = false;
         
         [JsonIgnore]
         private int count = 0;
@@ -39,6 +42,9 @@ namespace ExileMaps.Classes
         public string[] IDs { get; set; } = [];
         public string ShortestId { get; set; }
         public string[] Biomes { get; set; } = [];
+
+        // Sprite drawn for this map's nodes (and special-map indicator). Serializes as int; default Circle.
+        public SpriteIcon Icon { get; set; } = SpriteIcon.Circle;
 
         public bool IsTower() {
             return MatchID("MapSwampTower") || MatchID("MapLostTowers") || MatchID("MapMesa") || MatchID("MapBluff") || MatchID("MapAlpineRidge");
@@ -124,6 +130,45 @@ namespace ExileMaps.Classes
                 {
                     highlight = value;
                     OnPropertyChanged(nameof(Highlight));
+                }
+            }
+        }
+
+        public bool ColorNodesByWeight
+        {
+            get => colorNodesByWeight;
+            set
+            {
+                if (colorNodesByWeight != value)
+                {
+                    colorNodesByWeight = value;
+                    OnPropertyChanged(nameof(ColorNodesByWeight));
+                }
+            }
+        }
+
+        public bool UseWeightColorForName
+        {
+            get => useWeightColorForName;
+            set
+            {
+                if (useWeightColorForName != value)
+                {
+                    useWeightColorForName = value;
+                    OnPropertyChanged(nameof(UseWeightColorForName));
+                }
+            }
+        }
+
+        public bool Favorite
+        {
+            get => favorite;
+            set
+            {
+                if (favorite != value)
+                {
+                    favorite = value;
+                    OnPropertyChanged(nameof(Favorite));
                 }
             }
         }

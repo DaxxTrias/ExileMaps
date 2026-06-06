@@ -17,6 +17,7 @@ namespace ExileMaps.Classes
         private float weight = 1.0f;
         private Color color = Color.FromArgb(255, 255, 255, 255);
         private bool highlight = true;
+        private bool favorite = false;
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -79,6 +80,19 @@ namespace ExileMaps.Classes
                 {
                     highlight = value;
                     OnPropertyChanged(nameof(Highlight));
+                }
+            }
+        }
+
+        public bool Favorite
+        {
+            get => favorite;
+            set
+            {
+                if (favorite != value)
+                {
+                    favorite = value;
+                    OnPropertyChanged(nameof(Favorite));
                 }
             }
         }
