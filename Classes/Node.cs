@@ -53,6 +53,9 @@ public class Node
     // True when the map grants an atlas passive point (AtlasEntry.PassiveSkill present).
     [JsonIgnore]
     public bool GivesAtlasPoint { get; set; }
+    // True when the map has atlas quest content (PassiveSkill.Id contains "AtlasQuest").
+    [JsonIgnore]
+    public bool HasAtlasQuest { get; set; }
 
     public long Address { get; set; }
     public long ParentAddress { get; set; }

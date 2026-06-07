@@ -239,6 +239,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 // 3d. Atlas-point markers (small silver star just above the node)
                 foreach (var (node, rect) in nodePositions)
                     DrawAtlasPointIndicator(node, rect);
+                // 3e. Atlas-quest markers (small golden exclamation above the node)
+                foreach (var (node, rect) in nodePositions)
+                    DrawAtlasQuestIndicator(node, rect);
                 // 4. Labels
                 foreach (var (node, rect) in nodePositions)
                     DrawNodeLabels(node, rect);
@@ -1111,11 +1114,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private void SetAtlasPassive(AtlasNodeDescription node, Node toNode) {
         try {
             var passiveId = node.Element?.AtlasEntry?.PassiveSkill?.Id;
-            bool grantsInside = passiveId?.Contains("Inside", StringComparison.OrdinalIgnoreCase) ?? false;
             bool completed = node.Element?.IsCompleted ?? false;
+            bool grantsInside = passiveId?.Contains("Inside", StringComparison.OrdinalIgnoreCase) ?? false;
             toNode.GivesAtlasPoint = grantsInside && !completed;
+            toNode.HasAtlasQuest = (passiveId?.Contains("AtlasQuest", StringComparison.OrdinalIgnoreCase) ?? false) && !completed;
         }
-        catch { toNode.GivesAtlasPoint = false; }
+        catch { toNode.GivesAtlasPoint = false; toNode.HasAtlasQuest = false; }
     }
     #endregion
 
@@ -1332,7 +1336,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private void DrawAtlasPointIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
     {
         try {
-            if (!cachedNode.GivesAtlasPoint || cachedNode.IsVisited || !customIconsLoaded)
+            if (!Settings.Graphics.ShowAtlasPointIndicator || !cachedNode.GivesAtlasPoint || cachedNode.IsVisited || !customIconsLoaded)
                 return;
 
             float size = 20f;
@@ -1340,6 +1344,26 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             DrawNodeSprite(center, size, size, SpriteIcon.Star8, AtlasPointColor, allowFlatten: false);
         } catch (Exception e) {
             LogError("Error drawing atlas point indicator: " + e.Message);
+        }
+    }
+
+    // Golden tint for the atlas-quest marker.
+    private static readonly Color AtlasQuestColor = Color.FromArgb(255, 255, 200, 40);
+
+    /// MARK: DrawAtlasQuestIndicator
+    /// Draws a small golden exclamation just above nodes that have atlas quest content.
+    private void DrawAtlasQuestIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!Settings.Graphics.ShowAtlasQuestIndicator || !cachedNode.HasAtlasQuest || cachedNode.IsVisited || !customIconsLoaded)
+                return;
+
+            float size = 20f;
+            // Offset right of the atlas-point star (which sits centered above the node) so both can show.
+            Vector2 center = new Vector2(nodeCurrentPosition.Center.X + size, nodeCurrentPosition.Center.Y - nodeCurrentPosition.Height / 2f - size / 2f - 2f);
+            DrawNodeSprite(center, size, size, SpriteIcon.Exclamation, AtlasQuestColor, allowFlatten: false);
+        } catch (Exception e) {
+            LogError("Error drawing atlas quest indicator: " + e.Message);
         }
     }
 

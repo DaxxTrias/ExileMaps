@@ -226,6 +226,12 @@ public class GraphicSettings
 
     [Menu("Lay Icons Flat", "Vertically squash node icons so round sprites read as flat discs lying on the tilted atlas plane. 0 = upright. Tune by eye.")]
     public RangeNode<float> IconFlatten { get; set; } = new RangeNode<float>(0.180f, 0f, 0.9f);
+
+    [Menu("Show Atlas Point Marker", "Draw a small silver star above maps that grant an atlas passive point.")]
+    public ToggleNode ShowAtlasPointIndicator { get; set; } = new ToggleNode(true);
+
+    [Menu("Show Atlas Quest Marker", "Draw a small golden exclamation above maps that have atlas quest content.")]
+    public ToggleNode ShowAtlasQuestIndicator { get; set; } = new ToggleNode(true);
 }
 
 [Submenu(CollapsedByDefault = true)]
