@@ -18,8 +18,20 @@ namespace ExileMaps;
 public class ExileMapsSettings : ISettings
 {
     public ToggleNode Enable { get; set; } = new ToggleNode(false);
-    public FeatureSettings Features { get; set; } = new FeatureSettings();    
-    public HotkeySettings Keybinds { get; set; } = new HotkeySettings();  
+
+    // Top-level import/export: full settings and weight-only presets. Both span every category.
+    [JsonIgnore]
+    public CustomNode WeightImportExport { get; set; } = new CustomNode
+    {
+        DrawDelegate = () =>
+        {
+            SettingsHelpers.DrawImportExportSettingsButtons();
+            SettingsHelpers.DrawImportExportWeightsButtons();
+        }
+    };
+
+    public FeatureSettings Features { get; set; } = new FeatureSettings();
+    public HotkeySettings Keybinds { get; set; } = new HotkeySettings();
     public GraphicSettings Graphics { get; set; } = new GraphicSettings();
 
     [Menu("Map Settings")]
@@ -232,6 +244,12 @@ public class GraphicSettings
 
     [Menu("Show Atlas Quest Marker", "Draw a small golden exclamation above maps that have atlas quest content.")]
     public ToggleNode ShowAtlasQuestIndicator { get; set; } = new ToggleNode(true);
+
+    // Pixel offset applied to map name and weight text relative to the node center.
+    [Menu("Map Name Offset X", "Horizontal pixel offset of the map name/weight text relative to the node center.")]
+    public RangeNode<int> MapNameOffsetX { get; set; } = new RangeNode<int>(0, -200, 200);
+    [Menu("Map Name Offset Y", "Vertical pixel offset of the map name/weight text relative to the node center.")]
+    public RangeNode<int> MapNameOffsetY { get; set; } = new RangeNode<int>(25, -200, 200);
 }
 
 [Submenu(CollapsedByDefault = true)]
@@ -562,10 +580,6 @@ public class MapSettings
     public bool ShowMapNamesOnHiddenNodes { get; set; } = true;
     public Color GoodNodeColor { get; set; } = Color.FromArgb(200, 50, 255, 50);
     public Color BadNodeColor { get; set; } = Color.FromArgb(200, 255, 50, 50);
-
-    // Pixel offset applied to map name and weight text relative to the node center.
-    public RangeNode<int> MapNameOffsetX { get; set; } = new RangeNode<int>(0, -200, 200);
-    public RangeNode<int> MapNameOffsetY { get; set; } = new RangeNode<int>(25, -200, 200);
 
     public ObservableDictionary<string, Map> Maps { get; set; } = [];
 }
@@ -1182,6 +1196,52 @@ public static class SettingsHelpers {
             ImGui.SameLine();
             if (ImGui.Button($"Cancel##{id}_cancel"))
                 confirming = false;
+        }
+    }
+
+    /// <summary>
+    /// Draws "Export Weights" / "Import Weights" buttons that save or load every weight (maps, content,
+    /// biomes, mods) to/from a user-chosen JSON file via a native file dialog.
+    /// </summary>
+    public static void DrawImportExportWeightsButtons() {
+        if (ImGui.Button("Export Weights##export_weights"))
+            Main.ExportWeights();
+        if (ImGui.IsItemHovered()) {
+            ImGui.BeginTooltip();
+            ImGui.Text("Save all weights (maps, content, biomes, mods) to a JSON file.");
+            ImGui.EndTooltip();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Import Weights##import_weights"))
+            Main.ImportWeights();
+        if (ImGui.IsItemHovered()) {
+            ImGui.BeginTooltip();
+            ImGui.Text("Load weights from a previously exported JSON file.");
+            ImGui.EndTooltip();
+        }
+    }
+
+    /// <summary>
+    /// Draws "Export Settings" / "Import Settings" buttons that save or load the entire settings object
+    /// (all categories) to/from a user-chosen JSON file via a native file dialog.
+    /// </summary>
+    public static void DrawImportExportSettingsButtons() {
+        if (ImGui.Button("Export Settings##export_settings"))
+            Main.ExportSettings();
+        if (ImGui.IsItemHovered()) {
+            ImGui.BeginTooltip();
+            ImGui.Text("Save all plugin settings to a JSON file.");
+            ImGui.EndTooltip();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Import Settings##import_settings"))
+            Main.ImportSettings();
+        if (ImGui.IsItemHovered()) {
+            ImGui.BeginTooltip();
+            ImGui.Text("Load all plugin settings from a previously exported JSON file.\nOverwrites your current settings.");
+            ImGui.EndTooltip();
         }
     }
 }
