@@ -156,9 +156,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         }
 
-        // Coalesce settings-change weight recalcs. Slider drags fire PropertyChanged many times per
-        // second; instead of recomputing bounds on each, mark dirty and recompute at most ~4x/sec.
-        if (weightsDirty && !refreshingCache && DateTime.Now.Subtract(lastWeightRecalc).TotalMilliseconds > 250) {
+        // Coalesce settings-change weight recalcs. Slider drags (and quick-edit edits) fire
+        // PropertyChanged many times per second; mark dirty and recompute at most ~2x/sec (500ms debounce).
+        if (weightsDirty && !refreshingCache && DateTime.Now.Subtract(lastWeightRecalc).TotalMilliseconds > 500) {
             weightsDirty = false;
             lastWeightRecalc = DateTime.Now;
             RecalculateWeights();
@@ -178,6 +178,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (WaypointPanelIsOpen) DrawWaypointPanel();
 
         if (quickEditOpen) DrawQuickEditPanel();
+
+        if (debugNodeOpen) DrawNodeDebugPanel();
 
         TickCount++;
 
@@ -234,6 +236,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 // 3c. Special map markers (icon above the node instead of a covering fill)
                 foreach (var (node, rect) in nodePositions)
                     DrawSpecialIndicator(node, rect);
+                // 3d. Atlas-point markers (small silver star just above the node)
+                foreach (var (node, rect) in nodePositions)
+                    DrawAtlasPointIndicator(node, rect);
                 // 4. Labels
                 foreach (var (node, rect) in nodePositions)
                     DrawNodeLabels(node, rect);
@@ -302,6 +307,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RegisterHotkey(Settings.Keybinds.ToggleWaypointPanelHotkey);
         RegisterHotkey(Settings.Keybinds.AddWaypointHotkey);
         RegisterHotkey(Settings.Keybinds.QuickEditNodeHotkey);
+        RegisterHotkey(Settings.Keybinds.DebugNodeHotkey);
         RegisterHotkey(Settings.Keybinds.DeleteWaypointHotkey);
         RegisterHotkey(Settings.Keybinds.ShowTowerRangeHotkey);
         RegisterHotkey(Settings.Keybinds.UpdateMapsKey);
@@ -352,6 +358,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (Settings.Keybinds.QuickEditNodeHotkey.PressedOnce()) {
             var editNode = GetClosestNodeToCursor();
             if (editNode != null) { quickEditNode = editNode; quickEditOpen = true; }
+        }
+
+        if (Settings.Keybinds.DebugNodeHotkey.PressedOnce()) {
+            var dbgNode = GetClosestNodeToCursor();
+            if (dbgNode != null) { debugNode = dbgNode; debugNodeOpen = true; }
         }
 
         if (Settings.Keybinds.DeleteWaypointHotkey.PressedOnce())        
@@ -954,6 +965,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 AddNodeContentTowers(node, newNode);
 
                 AddNodeContentFromIdentity(node, newNode);
+                SetAtlasPassive(node, newNode);
 
             } catch (Exception e) {
                 LogError($"Error getting Content for map type {node.Address.ToString("X")}: " + e.Message);
@@ -1002,6 +1014,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         AddNodeContentTowers(node, cachedNode);
 
         AddNodeContentFromIdentity(node, cachedNode);
+        SetAtlasPassive(node, cachedNode);
 
         // Tower tablet mods have been removed from the game, so effect scanning is disabled.
         cachedNode.Effects.Clear();
@@ -1091,6 +1104,18 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 toNode.Content.TryAdd(tower.Name, tower);
 
 
+    }
+
+    // A map grants an atlas passive point when its AtlasEntry.PassiveSkill.Id contains "Inside"
+    // and the node hasn't been completed yet.
+    private void SetAtlasPassive(AtlasNodeDescription node, Node toNode) {
+        try {
+            var passiveId = node.Element?.AtlasEntry?.PassiveSkill?.Id;
+            bool grantsInside = passiveId?.Contains("Inside", StringComparison.OrdinalIgnoreCase) ?? false;
+            bool completed = node.Element?.IsCompleted ?? false;
+            toNode.GivesAtlasPoint = grantsInside && !completed;
+        }
+        catch { toNode.GivesAtlasPoint = false; }
     }
     #endregion
 
@@ -1296,6 +1321,25 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 Graphics.DrawImage(IconsFile, iconRect, SpriteHelper.GetUV(MapIconsIndex.LootFilterLargeWhiteHexagon), Settings.Graphics.SpecialMapColor);
         } catch (Exception e) {
             LogError("Error drawing special map indicator: " + e.Message);
+        }
+    }
+
+    // Silver tint for the atlas-point marker.
+    private static readonly Color AtlasPointColor = Color.FromArgb(255, 200, 200, 205);
+
+    /// MARK: DrawAtlasPointIndicator
+    /// Draws a small silver Star8 just above nodes whose map grants an atlas passive point.
+    private void DrawAtlasPointIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!cachedNode.GivesAtlasPoint || cachedNode.IsVisited || !customIconsLoaded)
+                return;
+
+            float size = 20f;
+            Vector2 center = new Vector2(nodeCurrentPosition.Center.X, nodeCurrentPosition.Center.Y - nodeCurrentPosition.Height / 2f - size / 2f - 2f);
+            DrawNodeSprite(center, size, size, SpriteIcon.Star8, AtlasPointColor, allowFlatten: false);
+        } catch (Exception e) {
+            LogError("Error drawing atlas point indicator: " + e.Message);
         }
     }
 
@@ -1913,6 +1957,97 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             LogError("Error drawing quick edit panel: " + e.Message);
             quickEditOpen = false;
             quickEditNode = null;
+        }
+    }
+
+    // MARK: Node Debug
+    // Node currently shown in the debug popup, and whether it's open.
+    private Node debugNode;
+    private bool debugNodeOpen;
+
+    /// MARK: DrawNodeDebugPanel
+    /// Floating popup (opened by the Debug Node hotkey while hovering a node) showing the node's
+    /// debug text, element flags (as a binary string + per-flag), atlas-passive presence, biome id,
+    /// and the content present. All game-memory reads are guarded so a stale read can't crash the HUD.
+    private void DrawNodeDebugPanel() {
+        try {
+            if (debugNode == null) { debugNodeOpen = false; return; }
+            var node = debugNode;
+            var el = node.MapNode?.Element;
+
+            Vector2 pos;
+            try { pos = node.MapNode.Element.GetClientRect().Center + new Vector2(30, 0); }
+            catch { pos = screenCenter; }
+            ImGui.SetNextWindowPos(pos, ImGuiCond.Appearing);
+            ImGui.SetNextWindowSize(new Vector2(360, 0), ImGuiCond.Appearing);
+            ImGui.SetNextWindowBgAlpha(0.93f);
+
+            if (ImGui.Begin("Node Debug###nodedebug", ref debugNodeOpen, ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.AlwaysAutoResize)) {
+                ImGui.TextUnformatted(node.DebugText(false));
+
+                string parentAddr = $"{node.ParentAddress:X}";
+                if (ImGui.SmallButton($"Copy Parent Address##nd")) ImGui.SetClipboardText(parentAddr);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip($"Copy {parentAddr} to clipboard");
+
+                ImGui.Separator();
+
+                // Named element status getters, rendered true=1/false=0 in this order:
+                // CanTraverse, IsActive, IsCompleted, IsSaturated, IsScrollable, IsUnlocked,
+                // IsValid, IsVisible, IsVisibleLocal, IsVisited, HasShinyHighlight.
+                var status = new List<bool>();
+                void Add(Func<bool> get) { try { status.Add(get()); } catch { status.Add(false); } }
+                Add(() => el.CanTraverse);
+                Add(() => el.IsActive);
+                Add(() => el.IsCompleted);
+                Add(() => el.IsSaturated);
+                Add(() => el.IsScrollable);
+                Add(() => el.IsUnlocked);
+                Add(() => el.IsValid);
+                Add(() => el.IsVisible);
+                Add(() => el.IsVisibleLocal);
+                Add(() => el.IsVisited);
+                Add(() => el.HasShinyHighlight);
+                ImGui.Text($"Status: {string.Concat(status.Select(b => b ? "1" : "0"))}");
+
+                // Element.Flags is a separate List<bool> of the node's raw flag bits.
+                string bits = "";
+                try { bits = string.Concat(el.Flags.Select(b => b ? "1" : "0")); } catch { }
+                ImGui.Text($"Flags: {bits}");
+
+                bool passive = false;
+                try { passive = el?.AtlasEntry?.PassiveSkill != null; } catch { }
+                ImGui.Text($"AtlasEntry.PassiveSkill: {(passive ? "1" : "0")}");
+
+                string biomeId = "";
+                try { biomeId = node.MapNode.Element.Biome?.Id ?? ""; } catch { }
+                ImGui.Text($"Biome.Id: {biomeId}");
+
+                ImGui.Separator();
+                ImGui.Text("Content:");
+                if (node.Content.Count == 0)
+                    ImGui.TextDisabled("  (none)");
+                else
+                    foreach (var (_, c) in node.Content)
+                        ImGui.TextUnformatted($"  {c.Name}");
+
+                ImGui.Text("Biomes:");
+                var biomeNames = node.Biomes.Where(x => x.Value != null).Select(x => x.Value.Name).ToList();
+                if (biomeNames.Count == 0)
+                    ImGui.TextDisabled("  (none)");
+                else
+                    foreach (var b in biomeNames)
+                        ImGui.TextUnformatted($"  {b}");
+
+                ImGui.Separator();
+                if (ImGui.Button("Close##nd")) debugNodeOpen = false;
+            }
+            ImGui.End();
+
+            if (!debugNodeOpen) debugNode = null;
+        } catch (Exception e) {
+            LogError("Error drawing node debug panel: " + e.Message);
+            debugNodeOpen = false;
+            debugNode = null;
         }
     }
 
