@@ -20,6 +20,7 @@ namespace ExileMaps.Classes
         public bool Show { get; set; }
         public bool Line { get; set; }
         public bool Arrow { get; set; }
+        public bool AutoCreated { get; set; } = false;
         public float Scale { get; set; } = 1;
         [JsonIgnore]
         public List<Node> PathFromStart { get; set; } = new List<Node>();

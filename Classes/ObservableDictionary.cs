@@ -118,6 +118,9 @@ namespace ExileMaps.Classes
             try {
                 var item = (TValue)sender;
                 var key = dictionary.FirstOrDefault(x => EqualityComparer<TValue>.Default.Equals(x.Value, item)).Key;
+                // Propagate item property changes (e.g. Weight edits) so subscribers can react —
+                // drives the debounced weight recalc. Without this, only Add/Remove notified them.
+                OnPropertyChanged(e.PropertyName);
                 OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, new KeyValuePair<TKey, TValue>(key, item), new KeyValuePair<TKey, TValue>(key, item)));            }
             catch (Exception ex) {
                 //Console.WriteLine(ex);

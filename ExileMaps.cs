@@ -60,6 +60,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         "Tower"
     ];
     private static readonly HashSet<string> ContentRingDrawOrderLookup = new(ContentRingDrawOrder, StringComparer.OrdinalIgnoreCase);
+    // New custom sprite sheet for the plugin (drop the generated PNG in textures/). Loaded if present;
+    // grid layout (SpriteSheetCols x SpriteSheetRows) to be set once the sheet is finalized.
+    // Custom sprite atlas (SpriteAtlas): 1024x768, 8x6, 128px cells, 48 desaturated icons.
+    private const string CustomIconsPath = "textures\\Icons_Desaturated.png";
+    private const string CustomIconsName = SpriteAtlas.FileName;
     
     public IngameUIElements UI;
     public AtlasPanel AtlasPanel;
@@ -67,7 +72,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private Vector2 screenCenter;
     private List<Node> selectedNodes = [];
     private RectangleF cachedScreenRect;
-    private readonly List<RectangleF> cachedTooltipRects = [];
+    private readonly List<RectangleF> cachedExcludeRects = [];
     private Dictionary<Vector2i, Node> mapCache = [];
     public bool refreshCache = false;
     private int cacheTicks = 0;
@@ -90,8 +95,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     internal IntPtr iconsId;
     internal IntPtr arrowId;
+    internal IntPtr customIconsId;
+    private bool customIconsLoaded = false;
 
     private bool AtlasHasBeenClosed = true;
+    private bool gameFilesScraped = false;
     private bool WaypointPanelIsOpen = false;
     private bool ShowMinimap = false;
     private readonly object unknownLogLock = new();
@@ -125,6 +133,15 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         iconsId = Graphics.GetTextureId(IconsFile);
         Graphics.InitImage("arrow.png", Path.Combine(DirectoryFullName, ArrowPath));
         arrowId = Graphics.GetTextureId("arrow.png");
+
+        // Load the custom sprite sheet if it's been added. Guarded so the plugin still runs before
+        // the PNG exists; once present, address sprites via GetSpriteUV(col, row).
+        var customIconsFull = Path.Combine(DirectoryFullName, CustomIconsPath);
+        if (File.Exists(customIconsFull)) {
+            Graphics.InitImage(CustomIconsName, customIconsFull);
+            customIconsId = Graphics.GetTextureId(CustomIconsName);
+            customIconsLoaded = true;
+        }
 
         CanUseMultiThreading = true;
 
@@ -165,6 +182,15 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         AtlasHasBeenClosed = false;
 
+        // Scrape map types, content types and biomes from the game's endgame files once they're
+        // available (files may not be loaded yet at Initialise). Adds anything missing from the json
+        // seeds without overwriting them. All three load together, so gate on the map scrape succeeding.
+        if (!gameFilesScraped && UpdateMapData(false)) {
+            UpdateContentData(false);
+            UpdateBiomeData(false);
+            gameFilesScraped = true;
+        }
+
         if (atlasWarmupTicks < 3)
             atlasWarmupTicks++;
 
@@ -183,9 +209,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (refreshCache && atlasWarmupTicks >= 3)
             TryStartRefreshCacheJob();
 
-        // Coalesce settings-change weight recalcs. Slider drags fire PropertyChanged many times per
-        // second; instead of recomputing bounds on each, mark dirty and recompute at most ~4x/sec.
-        if (weightsDirty && !refreshingCache && DateTime.Now.Subtract(lastWeightRecalc).TotalMilliseconds > 250) {
+        // Coalesce settings-change weight recalcs. Slider drags (and quick-edit edits) fire
+        // PropertyChanged many times per second; mark dirty and recompute at most ~2x/sec (500ms debounce).
+        if (weightsDirty && !refreshingCache && DateTime.Now.Subtract(lastWeightRecalc).TotalMilliseconds > 500) {
             weightsDirty = false;
             lastWeightRecalc = DateTime.Now;
             RecalculateWeights(recalculateNodeWeights: true);
@@ -200,9 +226,15 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     public override void Render()
     {
+        ProcessPendingWeightFile();
+
         CheckKeybinds();
 
         if (WaypointPanelIsOpen) DrawWaypointPanel();
+
+        if (quickEditOpen) DrawQuickEditPanel();
+
+        if (debugNodeOpen) DrawNodeDebugPanel();
 
         TickCount++;
 
@@ -263,6 +295,18 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 // 3. Rings
                 foreach (var (node, rect) in nodePositions)
                     DrawNodeRings(node, rect);
+                // 3b. Favorite star markers (above rings, below labels)
+                foreach (var (node, rect) in nodePositions)
+                    DrawFavoriteIndicator(node, rect);
+                // 3c. Special map markers (icon above the node instead of a covering fill)
+                foreach (var (node, rect) in nodePositions)
+                    DrawSpecialIndicator(node, rect);
+                // 3d. Atlas-point markers (small silver star just above the node)
+                foreach (var (node, rect) in nodePositions)
+                    DrawAtlasPointIndicator(node, rect);
+                // 3e. Atlas-quest markers (small golden exclamation above the node)
+                foreach (var (node, rect) in nodePositions)
+                    DrawAtlasQuestIndicator(node, rect);
                 // 4. Labels
                 foreach (var (node, rect) in nodePositions)
                     DrawNodeLabels(node, rect);
@@ -335,11 +379,16 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private void RegisterHotkeys() {
         RegisterHotkey(Settings.Keybinds.RefreshMapCacheHotkey);
         RegisterHotkey(Settings.Keybinds.DebugKey);
+        RegisterHotkey(Settings.Keybinds.ToggleDebugModeHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleWaypointPanelHotkey);
         RegisterHotkey(Settings.Keybinds.AddWaypointHotkey);
+        RegisterHotkey(Settings.Keybinds.QuickEditNodeHotkey);
+        RegisterHotkey(Settings.Keybinds.DebugNodeHotkey);
         RegisterHotkey(Settings.Keybinds.DeleteWaypointHotkey);
         RegisterHotkey(Settings.Keybinds.ShowTowerRangeHotkey);
         RegisterHotkey(Settings.Keybinds.UpdateMapsKey);
+        RegisterHotkey(Settings.Keybinds.UpdateContentKey);
+        RegisterHotkey(Settings.Keybinds.UpdateBiomesKey);
         RegisterHotkey(Settings.Keybinds.ToggleLockedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleUnlockedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleVisitedNodesHotkey);
@@ -348,6 +397,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RegisterHotkey(Settings.Keybinds.AtlasOffsetRightHotkey);
         RegisterHotkey(Settings.Keybinds.AtlasOffsetUpHotkey);
         RegisterHotkey(Settings.Keybinds.AtlasOffsetDownHotkey);
+        RegisterHotkey(Settings.Keybinds.ToggleWaypointsHotkey);
     }
     
     private static void RegisterHotkey(HotkeyNode hotkey)
@@ -366,18 +416,37 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             RequestMapCacheRefresh(clearCache: true);
         }
 
-        if (Settings.Keybinds.DebugKey.PressedOnce())        
+        if (Settings.Keybinds.DebugKey.PressedOnce())
             DoDebugging();
 
-        if (Settings.Keybinds.UpdateMapsKey.PressedOnce())        
+        if (Settings.Keybinds.ToggleDebugModeHotkey.PressedOnce())
+            Settings.Features.DebugMode.Value = !Settings.Features.DebugMode.Value;
+
+        if (Settings.Keybinds.UpdateMapsKey.PressedOnce())
             UpdateMapData();
+
+        if (Settings.Keybinds.UpdateContentKey.PressedOnce())
+            UpdateContentData();
+
+        if (Settings.Keybinds.UpdateBiomesKey.PressedOnce())
+            UpdateBiomeData();
 
         if (Settings.Keybinds.ToggleWaypointPanelHotkey.PressedOnce()) {  
             WaypointPanelIsOpen = !WaypointPanelIsOpen;
         }
 
-        if (Settings.Keybinds.AddWaypointHotkey.PressedOnce())        
+        if (Settings.Keybinds.AddWaypointHotkey.PressedOnce())
             AddWaypoint(GetClosestNodeToCursor());
+
+        if (Settings.Keybinds.QuickEditNodeHotkey.PressedOnce()) {
+            var editNode = GetClosestNodeToCursor();
+            if (editNode != null) { quickEditNode = editNode; quickEditOpen = true; }
+        }
+
+        if (Settings.Keybinds.DebugNodeHotkey.PressedOnce()) {
+            var dbgNode = GetClosestNodeToCursor();
+            if (dbgNode != null) { debugNode = dbgNode; debugNodeOpen = true; }
+        }
 
         if (Settings.Keybinds.DeleteWaypointHotkey.PressedOnce())        
             RemoveWaypoint(GetClosestNodeToCursor());
@@ -393,6 +462,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         if (Settings.Keybinds.ToggleHiddenNodesHotkey.PressedOnce())
             Settings.Features.ProcessHiddenNodes.Value = !Settings.Features.ProcessHiddenNodes.Value;
+
+        if (Settings.Keybinds.ToggleWaypointsHotkey.PressedOnce()) {
+            bool show = !Settings.Waypoints.ShowWaypoints;
+            Settings.Waypoints.ShowWaypoints = show;
+            Settings.Waypoints.ShowWaypointArrows = show;
+        }
 
         if (Settings.Keybinds.ShowTowerRangeHotkey.PressedOnce()) {
             var closestNode = GetClosestNodeToCursor();
@@ -517,6 +592,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     Settings.MapTypes.Maps.TryAdd(key, map);
                 }
             }
+
+            MergeDuplicateMapsByName();
         } catch (Exception e) {
             LogError("Error loading default maps: " + e.Message + "\n" + e.StackTrace);
         }
@@ -567,10 +644,245 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
     }
 
-    #endregion
-    
+    // Collapses map-type entries that share a display Name into a single entry, merging their ids and
+    // removing the redundant rows. Different ids can share a Name (e.g. the "Precursor Tower" towers),
+    // and json seeding can leave several such rows; node matching uses MatchID(IDs), so the union of ids
+    // on the kept entry preserves matching.
+    private void MergeDuplicateMapsByName() {
+        var dupeGroups = Settings.MapTypes.Maps
+            .Where(kv => kv.Value != null && !string.IsNullOrWhiteSpace(kv.Value.Name))
+            .GroupBy(kv => kv.Value.Name, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .ToList();
 
-    
+        foreach (var group in dupeGroups) {
+            var keep = group.First().Value;
+            keep.IDs = [.. group
+                .SelectMany(kv => kv.Value.IDs ?? [])
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)];
+            if (string.IsNullOrEmpty(keep.ShortestId))
+                keep.ShortestId = keep.IDs.OrderBy(x => x.Length).FirstOrDefault();
+
+            foreach (var dup in group.Skip(1))
+                Settings.MapTypes.Maps.Remove(dup.Key);
+        }
+    }
+
+    #endregion
+
+    #region Weight Import/Export
+    // The host is a DirectX overlay (ClickableTransparentOverlay), not a WinForms app, so a WinForms
+    // ShowDialog joined on the render thread freezes/faults the overlay. Instead we open a native
+    // comdlg32 dialog on a short-lived background STA thread (no join, render keeps running), stash the
+    // chosen path in a volatile field, and let ProcessPendingWeightFile (called from Render) do the
+    // actual read/write on the plugin thread.
+    private volatile string pendingExportPath;
+    private volatile string pendingImportPath;
+    private volatile string pendingExportSettingsPath;
+    private volatile string pendingImportSettingsPath;
+    private volatile bool weightDialogBusy;
+
+    // Called from a button in settings. Launches the Save dialog asynchronously.
+    public void ExportWeights() => OpenWeightFileDialogAsync(save: true);
+
+    // Called from a button in settings. Launches the Open dialog asynchronously.
+    public void ImportWeights() => OpenWeightFileDialogAsync(save: false);
+
+    // Called from a button in settings. Save/load the entire settings object (all categories).
+    public void ExportSettings() => OpenSettingsFileDialogAsync(save: true);
+    public void ImportSettings() => OpenSettingsFileDialogAsync(save: false);
+
+    // Applies any path the dialog thread produced. Runs on the plugin thread (from Render) so all
+    // settings access stays on the same thread the UI uses.
+    public void ProcessPendingWeightFile() {
+        var export = pendingExportPath;
+        if (export != null) {
+            pendingExportPath = null;
+            WriteWeights(export);
+        }
+
+        var import = pendingImportPath;
+        if (import != null) {
+            pendingImportPath = null;
+            ReadWeights(import);
+        }
+
+        var exportSettings = pendingExportSettingsPath;
+        if (exportSettings != null) {
+            pendingExportSettingsPath = null;
+            WriteSettings(exportSettings);
+        }
+
+        var importSettings = pendingImportSettingsPath;
+        if (importSettings != null) {
+            pendingImportSettingsPath = null;
+            ReadSettings(importSettings);
+        }
+    }
+
+    // Exports every weight (maps, content, biomes, mods), keyed by the settings dictionary key so
+    // ImportWeights can match them back. Only weights are saved.
+    private void WriteWeights(string path) {
+        try {
+            var data = new WeightExport {
+                Maps = Settings.MapTypes.Maps.ToDictionary(x => x.Key, x => x.Value.Weight),
+                Content = Settings.MapContent.ContentTypes.ToDictionary(x => x.Key, x => x.Value.Weight),
+                Biomes = Settings.Biomes.Biomes.ToDictionary(x => x.Key, x => x.Value.Weight),
+                Mods = Settings.MapMods.MapModTypes?.ToDictionary(x => x.Key, x => x.Value.Weight) ?? [],
+            };
+
+            var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(path, json);
+            LogMessage($"Exported weights to {path} ({data.Maps.Count} maps, {data.Content.Count} content, {data.Biomes.Count} biomes, {data.Mods.Count} mods)");
+        } catch (Exception e) {
+            LogError("Error exporting weights: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    // Imports weights from a JSON file written by WriteWeights, applying them by key. For maps, falls
+    // back to matching by Name (spaces ignored) so presets survive id/key churn between leagues.
+    // Setting Weight via the property fires PropertyChanged, which marks weightsDirty for the recalc.
+    private void ReadWeights(string path) {
+        try {
+            if (!File.Exists(path)) {
+                LogError($"Error importing weights: file not found ({path}).");
+                return;
+            }
+
+            var data = JsonSerializer.Deserialize<WeightExport>(File.ReadAllText(path));
+            if (data == null) {
+                LogError("Error importing weights: file was empty or invalid.");
+                return;
+            }
+
+            int maps = 0, content = 0, biomes = 0, mods = 0;
+
+            foreach (var (key, weight) in data.Maps ?? []) {
+                if (Settings.MapTypes.Maps.TryGetValue(key, out var map)) {
+                    map.Weight = weight; maps++;
+                } else {
+                    // Fallback: match by Name (ignoring spaces) for presets made on a different install.
+                    var byName = Settings.MapTypes.Maps.Values.FirstOrDefault(m =>
+                        m.Name == key || m.Name?.Replace(" ", "") == key);
+                    if (byName != null) { byName.Weight = weight; maps++; }
+                }
+            }
+
+            foreach (var (key, weight) in data.Content ?? [])
+                if (Settings.MapContent.ContentTypes.TryGetValue(key, out var c)) { c.Weight = weight; content++; }
+
+            foreach (var (key, weight) in data.Biomes ?? [])
+                if (Settings.Biomes.Biomes.TryGetValue(key, out var b)) { b.Weight = weight; biomes++; }
+
+            if (Settings.MapMods.MapModTypes != null)
+                foreach (var (key, weight) in data.Mods ?? [])
+                    if (Settings.MapMods.MapModTypes.TryGetValue(key, out var m)) { m.Weight = weight; mods++; }
+
+            weightsDirty = true;
+            LogMessage($"Imported weights from {path} ({maps} maps, {content} content, {biomes} biomes, {mods} mods)");
+        } catch (Exception e) {
+            LogError("Error importing weights: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    // Serializes the entire settings object with Newtonsoft (the same serializer ExileCore2 uses to
+    // persist settings) so every category round-trips. CustomNode/EmptyNode UI fields are [JsonIgnore]
+    // and skipped automatically.
+    private void WriteSettings(string path) {
+        try {
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(Settings, Newtonsoft.Json.Formatting.Indented);
+            File.WriteAllText(path, json);
+            LogMessage($"Exported settings to {path}");
+        } catch (Exception e) {
+            LogError("Error exporting settings: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    // Imports a settings file written by WriteSettings. Uses PopulateObject so the live Settings instance
+    // (held by ExileCore2) is mutated in place rather than replaced - existing object/dictionary
+    // references stay valid, and dictionary entries merge by key. Forces a full recalc + cache refresh.
+    private void ReadSettings(string path) {
+        try {
+            if (!File.Exists(path)) {
+                LogError($"Error importing settings: file not found ({path}).");
+                return;
+            }
+
+            var json = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(json)) {
+                LogError("Error importing settings: file was empty or invalid.");
+                return;
+            }
+
+            Newtonsoft.Json.JsonConvert.PopulateObject(json, Settings);
+
+            weightsDirty = true;
+            refreshCache = true;
+            LogMessage($"Imported settings from {path}");
+        } catch (Exception e) {
+            LogError("Error importing settings: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    // Opens a native common dialog on a background STA thread. Does NOT block the render thread; the
+    // selected path is picked up by ProcessPendingWeightFile on a later frame.
+    private void OpenWeightFileDialogAsync(bool save) {
+        if (weightDialogBusy)
+            return;
+        weightDialogBusy = true;
+
+        var thread = new System.Threading.Thread(() => {
+            try {
+                string initialDir = DirectoryFullName;
+                string chosen = save
+                    ? NativeFileDialog.ShowSave("Export Weights", "exilemaps_weights.json", initialDir)
+                    : NativeFileDialog.ShowOpen("Import Weights", initialDir);
+
+                if (!string.IsNullOrEmpty(chosen)) {
+                    if (save) pendingExportPath = chosen;
+                    else pendingImportPath = chosen;
+                }
+            } catch (Exception e) {
+                LogError("Error opening file dialog: " + e.Message);
+            } finally {
+                weightDialogBusy = false;
+            }
+        });
+        thread.IsBackground = true;
+        thread.SetApartmentState(System.Threading.ApartmentState.STA);
+        thread.Start();
+    }
+
+    // Same async-dialog pattern as OpenWeightFileDialogAsync, but for the full settings file.
+    private void OpenSettingsFileDialogAsync(bool save) {
+        if (weightDialogBusy)
+            return;
+        weightDialogBusy = true;
+
+        var thread = new System.Threading.Thread(() => {
+            try {
+                string initialDir = DirectoryFullName;
+                string chosen = save
+                    ? NativeFileDialog.ShowSave("Export Settings", "exilemaps_settings.json", initialDir)
+                    : NativeFileDialog.ShowOpen("Import Settings", initialDir);
+
+                if (!string.IsNullOrEmpty(chosen)) {
+                    if (save) pendingExportSettingsPath = chosen;
+                    else pendingImportSettingsPath = chosen;
+                }
+            } catch (Exception e) {
+                LogError("Error opening file dialog: " + e.Message);
+            } finally {
+                weightDialogBusy = false;
+            }
+        });
+        thread.IsBackground = true;
+        thread.SetApartmentState(System.Threading.ApartmentState.STA);
+        thread.Start();
+    }
+    #endregion
+
     #region Map Processing
     ///MARK: RenderNode
     /// <summary>
@@ -700,52 +1012,175 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
     }
 
-    private void UpdateMapData() {
-        if (AtlasPanel == null)
-            return;
+    // Map types are scraped from the game's endgame map file list (GameController.Files.EndgameMaps)
+    // rather than the live atlas, so the full set is known without visiting/seeing nodes. The json seed
+    // (LoadDefaultMaps) still supplies curated Weight/Color/Highlight/Biomes for existing types; this
+    // only adds missing types and refreshes their IDs. Returns false if the file list isn't loaded yet
+    // (e.g. called before the game finishes loading files) so the caller can retry.
+    private bool UpdateMapData(bool writeToFile = true) {
+      try {
+        // Collapse any entries that share a display Name into a single row (union of ids). Different map
+        // ids can legitimately share a Name (e.g. the various "Precursor Tower" towers); we show one row
+        // per Name. Node matching falls back to MatchID(IDs), so every merged id still resolves.
+        MergeDuplicateMapsByName();
 
-        Settings.MapTypes.Maps ??= [];
+        var endgameMaps = GameController.Files.EndgameMaps?.EntriesList;
+        if (endgameMaps == null || endgameMaps.Count == 0)
+            return false;
 
-        var mapData = SnapshotAtlasDescriptions()
-            .Select(node => TryGetAtlasNodeArea(node, out WorldArea area)
-                ? new { Name = area.Name?.Trim() ?? string.Empty, Id = area.Id?.Trim() ?? string.Empty }
-                : null)
-            .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Name) && !string.IsNullOrWhiteSpace(x.Id))
-            .ToList();
-
-        // iterate through each name and find the ID for all mapes iwth that name
-        foreach (var mapGroup in mapData.GroupBy(x => x!.Name)) {
-            var name = mapGroup.Key;
-            var mapIds = mapGroup
-                .Select(x => x!.Id)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            // get shortest item from list
-            var shortID = mapIds.OrderBy(x => x.Length).FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(shortID))
+        int added = 0, updated = 0;
+        foreach (var endgameMap in endgameMaps) {
+            var area = endgameMap?.Area;
+            var id = area?.Id;
+            var name = area?.Name;
+            if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(name))
                 continue;
 
-            if (Settings.MapTypes.Maps.TryGetValue(name.Replace(" ", ""), out Map mapType) || Settings.MapTypes.Maps.TryGetValue(shortID, out mapType)) {        
-                Settings.MapTypes.Maps.Remove(name.Replace(" ", ""));                
-                Settings.MapTypes.Maps.TryAdd(shortID, mapType);
-                mapType.IDs = [.. mapIds];
+            // Skip dev/unused placeholder maps.
+            if (id.Contains("DNT-UNUSED") || name.Contains("DNT-UNUSED"))
+                continue;
+
+            // Existing map-type matching strips the _NoBoss suffix to form the key (see CacheNewMapNode).
+            var shortID = id.Replace("_NoBoss", "");
+
+            // Merge identically-named maps into a single entry, collecting all their ids. The json seed
+            // and prior scrapes already store Name, so a Name match covers both. Node matching falls back
+            // to MatchID(IDs), so every merged id still resolves even though the entry has one key.
+            var mapType = Settings.MapTypes.Maps.Values.FirstOrDefault(m => m.Name == name);
+            if (mapType != null) {
+                if (!mapType.IDs.Contains(id))
+                    mapType.IDs = [.. mapType.IDs, id];
+                if (string.IsNullOrEmpty(mapType.ShortestId))
+                    mapType.ShortestId = shortID;
+                updated++;
+            } else if (Settings.MapTypes.Maps.TryGetValue(name.Replace(" ", ""), out mapType) || Settings.MapTypes.Maps.TryGetValue(shortID, out mapType)) {
+                // Migrate any legacy name-keyed entry to the id key and make sure this id is recorded.
+                Settings.MapTypes.Maps.Remove(name.Replace(" ", ""));
+                mapType.Name = name;
                 mapType.ShortestId = shortID;
-                LogMessage($"Updated Map Data for {shortID}");
+                if (!mapType.IDs.Contains(id))
+                    mapType.IDs = [.. mapType.IDs, id];
+                Settings.MapTypes.Maps.TryAdd(shortID, mapType);
+                updated++;
             } else {
-                var newMap = new Map { 
-                    Name = name, 
-                    IDs = [.. mapIds],
-                    ShortestId = shortID};
-        
-                Settings.MapTypes.Maps.TryAdd(shortID, newMap);        
-                LogMessage($"Added Map Data for {shortID}");    
+                Settings.MapTypes.Maps.TryAdd(shortID, new Map {
+                    Name = name,
+                    IDs = [id],
+                    ShortestId = shortID });
+                added++;
             }
         }
 
-        var json = JsonSerializer.Serialize(Settings.MapTypes.Maps, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(Path.Combine(DirectoryFullName, defaultMapsPath), json);
+        if (writeToFile) {
+            var json = JsonSerializer.Serialize(Settings.MapTypes.Maps, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(Path.Combine(DirectoryFullName, defaultMapsPath), json);
+        }
 
-        LogMessage("Updated Map Data");
+        LogMessage($"Updated Map Data from game files ({added} new, {updated} updated)");
+        return true;
+      } catch (Exception e) {
+        LogError("Error updating map data from game files: " + e.Message);
+        return false;
+      }
+    }
+
+    // Scans the whole atlas for content types (AtlasPanelNode.ContentIdentity[].Id) and adds any not
+    // already in the Content data source, then writes content.json. Content types come from the game's
+    // EndgameMapContent file list (Name + Id), with icons from EndgameMapContentVisualIdentity (matched
+    // by Id). New entries are keyed by Id; legacy entries keyed by the spaced Name are migrated to the
+    // Id key (deduped via space-stripped compare). Returns false if the file list isn't loaded yet.
+    private bool UpdateContentData(bool writeToFile = true) {
+      try {
+        var contentEntries = GameController.Files.EndgameMapContent?.EntriesList;
+        if (contentEntries == null || contentEntries.Count == 0)
+            return false;
+
+        // Build Id -> AtlasIcon lookup from the visual identity file list.
+        var iconLookup = new Dictionary<string, string>();
+        var visuals = GameController.Files.EndgameMapContentVisualIdentity?.EntriesList;
+        if (visuals != null)
+            foreach (var vi in visuals) {
+                var vid = vi?.Id;
+                if (!string.IsNullOrEmpty(vid))
+                    iconLookup[vid] = vi.AtlasIcon?.ToString();
+            }
+
+        int added = 0, updated = 0;
+        foreach (var entry in contentEntries) {
+            var id = entry?.Id;
+            var name = entry?.Name;
+            if (string.IsNullOrEmpty(id))
+                continue;
+            if (string.IsNullOrEmpty(name))
+                name = id;
+
+            iconLookup.TryGetValue(id, out var icon);
+
+            // Find an existing entry under the Id key or a legacy spaced-Name key.
+            var existingKey = Settings.MapContent.ContentTypes.Keys.FirstOrDefault(k => k == id || k.Replace(" ", "") == id);
+            if (existingKey != null) {
+                var existing = Settings.MapContent.ContentTypes[existingKey];
+                existing.Name = name;
+                if (!string.IsNullOrEmpty(icon))
+                    existing.AtlasIcon = icon;
+                if (existingKey != id) {
+                    Settings.MapContent.ContentTypes.Remove(existingKey);
+                    Settings.MapContent.ContentTypes.TryAdd(id, existing);
+                }
+                updated++;
+            } else if (Settings.MapContent.ContentTypes.TryAdd(id, new Content { Name = name, Weight = 0.0f, AtlasIcon = icon })) {
+                added++;
+                LogMessage($"Added Content Type: {id}");
+            }
+        }
+
+        if (writeToFile) {
+            var json = JsonSerializer.Serialize(Settings.MapContent.ContentTypes, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(Path.Combine(DirectoryFullName, defaultContentPath), json);
+        }
+
+        LogMessage($"Updated Content Data from game files ({added} new, {updated} updated)");
+        return true;
+      } catch (Exception e) {
+        LogError("Error updating content data from game files: " + e.Message);
+        return false;
+      }
+    }
+
+    // Biomes come from the game's EndgameMapBiomes file list (Id only). Keyed by Id, matching the
+    // existing biomes.json convention. Returns false if the file list isn't loaded yet.
+    private bool UpdateBiomeData(bool writeToFile = true) {
+      try {
+        var biomeEntries = GameController.Files.EndgameMapBiomes?.EntriesList;
+        if (biomeEntries == null || biomeEntries.Count == 0)
+            return false;
+
+        int added = 0;
+        foreach (var entry in biomeEntries) {
+            var id = entry?.Id;
+            if (string.IsNullOrEmpty(id))
+                continue;
+
+            if (Settings.Biomes.Biomes.ContainsKey(id))
+                continue;
+
+            if (Settings.Biomes.Biomes.TryAdd(id, new Biome { Name = id, Weight = 0.0f })) {
+                added++;
+                LogMessage($"Added Biome: {id}");
+            }
+        }
+
+        if (writeToFile) {
+            var json = JsonSerializer.Serialize(Settings.Biomes.Biomes, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(Path.Combine(DirectoryFullName, defaultBiomesPath), json);
+        }
+
+        LogMessage($"Updated Biome Data from game files ({added} new)");
+        return true;
+      } catch (Exception e) {
+        LogError("Error updating biome data from game files: " + e.Message);
+        return false;
+      }
     }
 
     #endregion
@@ -781,6 +1216,41 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         return null; // No path found
     }
+
+    // Multi-source BFS seeded with every visited node at distance 0. Each unvisited node's value is
+    // the minimum number of steps to reach the explored region (same semantics as a waypoint's
+    // PathFromStart step count, but computed for the whole graph in a single O(V+E) pass so the
+    // atlas list can sort/display steps without a per-node BFS). Unreachable nodes are omitted.
+    private Dictionary<Vector2i, int> ComputeStepCounts()
+    {
+        var stepCounts = new Dictionary<Vector2i, int>();
+        var queue = new Queue<Node>();
+
+        lock (mapCacheLock)
+        {
+            foreach (var node in mapCache.Values.Where(x => x.IsVisited))
+            {
+                stepCounts[node.Coordinates] = 0;
+                queue.Enqueue(node);
+            }
+
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                int nextDist = stepCounts[current.Coordinates] + 1;
+                foreach (var neighbor in current.Neighbors.Values)
+                {
+                    if (neighbor == null || stepCounts.ContainsKey(neighbor.Coordinates))
+                        continue;
+                    stepCounts[neighbor.Coordinates] = nextDist;
+                    queue.Enqueue(neighbor);
+                }
+            }
+        }
+
+        return stepCounts;
+    }
+
     private Node FindClosestVisitedNode(Node waypointNode)
     {
         if (waypointNode == null)
@@ -1122,6 +1592,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             //LogMessage($"Map cache refreshed in {time}ms, {count} nodes processed, average time per node: {average:0.00}ms");
 
             RecalculateWeights(Settings.Features.RecalculateNodeWeightsOnRefresh);
+            SyncFavoriteWaypoints();
             UpdateWaypointPaths();
         }
         catch (Exception ex)
@@ -1159,6 +1630,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
             Vector2 start = currentRect.Center;
             Vector2 end = nextRect.Center;
+
+            if (!IsLineVisible(start, end))
+                continue;
 
             // Draw path line with a different color/style to distinguish from regular connections
             Graphics.DrawLine(start, end, Settings.Graphics.WaypointLineWidth , Settings.Graphics.PathLineColor);
@@ -1351,6 +1825,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 AddNodeContentTowers(node, newNode);
 
                 AddNodeContentFromIdentity(node, newNode);
+                SetAtlasPassive(node, newNode);
 
             } catch (Exception e) {
                 LogError($"Error getting Content for map type {node.Address.ToString("X")}: " + e.Message);
@@ -1395,6 +1870,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         AddNodeContentFromIdentity(node, cachedNode);
         AddNodeBiomes(cachedNode);
+        SetAtlasPassive(node, cachedNode);
 
         // Tower tablet mods have been removed from the game, so effect scanning is disabled.
         cachedNode.Effects.Clear();
@@ -1553,6 +2029,19 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
 
     }
+
+    // A map grants an atlas passive point when its AtlasEntry.PassiveSkill.Id contains "Inside"
+    // and the node hasn't been completed yet.
+    private void SetAtlasPassive(AtlasNodeDescription node, Node toNode) {
+        try {
+            var passiveId = node.Element?.AtlasEntry?.PassiveSkill?.Id;
+            bool completed = node.Element?.IsCompleted ?? false;
+            bool grantsInside = passiveId?.Contains("Inside", StringComparison.OrdinalIgnoreCase) ?? false;
+            toNode.GivesAtlasPoint = grantsInside && !completed;
+            toNode.HasAtlasQuest = (passiveId?.Contains("AtlasQuest", StringComparison.OrdinalIgnoreCase) ?? false) && !completed;
+        }
+        catch { toNode.GivesAtlasPoint = false; toNode.HasAtlasQuest = false; }
+    }
     #endregion
 
     #region Drawing Functions
@@ -1582,7 +2071,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             if (!TryGetNodeRect(destinationNode, out RectangleF destinationPos))
                 continue;
 
-            if (!IsOnScreen(destinationPos.Center) || !IsOnScreen(nodeCurrentPosition.Center))
+            if (!IsLineVisible(nodeCurrentPosition.Center, destinationPos.Center))
                 continue;
 
             if (Settings.Graphics.DrawGradientLines) {
@@ -1643,7 +2132,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return 0;
 
         float radius = (Count * Settings.Graphics.RingWidth) + 1 + ((nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 2 * Settings.Graphics.RingRadius);
-        Graphics.DrawCircle(nodeCurrentPosition.Center, radius, cachedContent.Color, Settings.Graphics.RingWidth, 32);
+        if (customIconsLoaded && Settings.Graphics.UseNodeIcons) {
+            // User-tunable scale (default 1.0 = original ring size).
+            float d = radius * 2f * Settings.Graphics.ContentRingIconScale;
+            DrawNodeSprite(nodeCurrentPosition.Center, d, d, SpriteIcon.CircleOutline, cachedContent.Color);
+        }
+        else
+            Graphics.DrawCircle(nodeCurrentPosition.Center, radius, cachedContent.Color, Settings.Graphics.RingWidth, 32);
 
         return 1;
     }
@@ -1681,6 +2176,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         position.X = Math.Clamp(position.X, labelSize.X, windowRect.Width - labelSize.X);
         position.Y = Math.Clamp(position.Y, labelSize.Y, windowRect.Height - labelSize.Y);
 
+        if (!IsLineVisible(position, nodeCurrentPosition.Center))
+            return;
+
         Graphics.DrawLine(position, nodeCurrentPosition.Center, Settings.Graphics.MapLineWidth, cachedNode.MapType.NodeColor);
 
         if (Settings.Features.DrawLineLabels) {
@@ -1699,9 +2197,134 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (!Settings.MapTypes.HighlightMapNodes || cachedNode.IsVisited || !cachedNode.MapType.Highlight)
             return;
             
+        // "Special" maps have wider node art. Skip the solid circle (it would cover the map art) —
+        // they get an icon drawn above the node by DrawSpecialIndicator instead.
+        if (Settings.Graphics.ShowSpecialMapIndicator && nodeCurrentPosition.Width > SpecialMapWidthThreshold)
+            return;
+
         var radius = (nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 4 * Settings.Graphics.NodeRadius;
-        Color color = Settings.MapTypes.ColorNodesByWeight ? GetWeightColor(cachedNode.Weight) : cachedNode.MapType.NodeColor;
-        Graphics.DrawCircleFilled(nodeCurrentPosition.Center, radius, color, 16);
+        Color color = cachedNode.MapType.ColorNodesByWeight ? GetWeightColor(cachedNode.Weight) : cachedNode.MapType.NodeColor;
+
+        if (customIconsLoaded && Settings.Graphics.UseNodeIcons) {
+            DrawNodeSprite(nodeCurrentPosition.Center, radius * 2f, radius * 2f, cachedNode.MapType.Icon, color);
+        } else {
+            Graphics.DrawCircleFilled(nodeCurrentPosition.Center, radius, color, 16);
+        }
+    }
+
+    // Atlas node art wider than this is a "special" map (e.g. unique/pinnacle layouts).
+    private const float SpecialMapWidthThreshold = 90f;
+
+    // Normalized UV RectangleF for a custom-atlas icon, adapting SpriteAtlas's corner-pair UVs to the
+    // RectangleF (x, y, w, h) form ExileCore's Graphics.DrawImage expects.
+    private static RectangleF GetSpriteUV(SpriteIcon icon)
+    {
+        var (uv0, uv1) = SpriteAtlas.GetUVPair(icon);
+        return new RectangleF(uv0.X, uv0.Y, uv1.X - uv0.X, uv1.Y - uv0.Y);
+    }
+
+    // True once the custom sprite atlas PNG has been found and loaded.
+    private bool CustomIconsAvailable => customIconsLoaded;
+
+    /// MARK: DrawNodeSprite
+    /// Draws a custom-atlas sprite centered at <paramref name="center"/>. IconFlatten vertically squashes
+    /// it (shorter dest rect) so a round sprite reads as a flat disc lying on the tilted atlas plane.
+    /// Uses Graphics.DrawImage so it layers like every other node draw (above lines, below labels/windows).
+    private void DrawNodeSprite(Vector2 center, float width, float height, SpriteIcon icon, Color color, bool allowFlatten = true)
+    {
+        float h = allowFlatten ? height * (1f - Settings.Graphics.IconFlatten) : height;
+        Graphics.DrawImage(CustomIconsName, new RectangleF(center.X - width / 2f, center.Y - h / 2f, width, h), GetSpriteUV(icon), color);
+    }
+
+    // Pixels above the node center to place the special-map icon (independent of node size).
+    private const float SpecialIconCenterOffset = 40f;
+
+    /// MARK: DrawSpecialIndicator
+    /// Draws an icon above "special" map nodes (wider node art) instead of covering them with a fill.
+    private void DrawSpecialIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!Settings.Graphics.ShowSpecialMapIndicator || !Settings.MapTypes.HighlightMapNodes ||
+                cachedNode.IsVisited || cachedNode.MapType == null || !cachedNode.MapType.Highlight ||
+                nodeCurrentPosition.Width <= SpecialMapWidthThreshold)
+                return;
+
+            Vector2 iconSize = new Vector2(48, 48) * Settings.Graphics.SpecialMapIconScale;
+
+            // Position above the node by a fixed offset from its center (independent of node size).
+            Vector2 iconPosition = nodeCurrentPosition.Center - new Vector2(iconSize.X / 2, SpecialIconCenterOffset + iconSize.Y / 2);
+
+            RectangleF iconRect = new RectangleF(iconPosition.X, iconPosition.Y, iconSize.X, iconSize.Y);
+            if (customIconsLoaded)
+                DrawNodeSprite(iconRect.Center, iconRect.Width, iconRect.Height, Settings.Graphics.SpecialMapIcon, Settings.Graphics.SpecialMapColor, allowFlatten: false);
+            else
+                Graphics.DrawImage(IconsFile, iconRect, SpriteHelper.GetUV(MapIconsIndex.LootFilterLargeWhiteHexagon), Settings.Graphics.SpecialMapColor);
+        } catch (Exception e) {
+            LogError("Error drawing special map indicator: " + e.Message);
+        }
+    }
+
+    // Silver tint for the atlas-point marker.
+    private static readonly Color AtlasPointColor = Color.FromArgb(255, 200, 200, 205);
+
+    /// MARK: DrawAtlasPointIndicator
+    /// Draws a small silver Star8 just above nodes whose map grants an atlas passive point.
+    private void DrawAtlasPointIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!Settings.Graphics.ShowAtlasPointIndicator || !cachedNode.GivesAtlasPoint || cachedNode.IsVisited || !customIconsLoaded)
+                return;
+
+            float size = 20f;
+            Vector2 center = new Vector2(nodeCurrentPosition.Center.X, nodeCurrentPosition.Center.Y - nodeCurrentPosition.Height / 2f - size / 2f - 2f);
+            DrawNodeSprite(center, size, size, SpriteIcon.Star8, AtlasPointColor, allowFlatten: false);
+        } catch (Exception e) {
+            LogError("Error drawing atlas point indicator: " + e.Message);
+        }
+    }
+
+    // Golden tint for the atlas-quest marker.
+    private static readonly Color AtlasQuestColor = Color.FromArgb(255, 255, 200, 40);
+
+    /// MARK: DrawAtlasQuestIndicator
+    /// Draws a small golden exclamation just above nodes that have atlas quest content.
+    private void DrawAtlasQuestIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!Settings.Graphics.ShowAtlasQuestIndicator || !cachedNode.HasAtlasQuest || cachedNode.IsVisited || !customIconsLoaded)
+                return;
+
+            float size = 20f;
+            // Offset right of the atlas-point star (which sits centered above the node) so both can show.
+            Vector2 center = new Vector2(nodeCurrentPosition.Center.X + size, nodeCurrentPosition.Center.Y - nodeCurrentPosition.Height / 2f - size / 2f - 2f);
+            DrawNodeSprite(center, size, size, SpriteIcon.Exclamation, AtlasQuestColor, allowFlatten: false);
+        } catch (Exception e) {
+            LogError("Error drawing atlas quest indicator: " + e.Message);
+        }
+    }
+
+    /// MARK: DrawFavoriteIndicator
+    /// Draws a star icon above nodes whose map type is flagged as a favorite.
+    private void DrawFavoriteIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!cachedNode.IsFavorited || cachedNode.IsVisited)
+                return;
+
+            Vector2 iconSize = new Vector2(48, 48) * Settings.Graphics.FavoriteIconScale;
+
+            // Position above the node (mirrors the waypoint icon offset).
+            Vector2 iconPosition = nodeCurrentPosition.Center - new Vector2(0, nodeCurrentPosition.Height / 2 + 20);
+            iconPosition -= new Vector2(iconSize.X / 2, iconSize.Y);
+
+            RectangleF iconRect = new RectangleF(iconPosition.X, iconPosition.Y, iconSize.X, iconSize.Y);
+            if (customIconsLoaded)
+                DrawNodeSprite(iconRect.Center, iconRect.Width, iconRect.Height, SpriteIcon.Star5, Settings.Graphics.FavoriteColor, allowFlatten: false);
+            else
+                Graphics.DrawImage(IconsFile, iconRect, SpriteHelper.GetUV(MapIconsIndex.LootFilterLargeWhiteStar), Settings.Graphics.FavoriteColor);
+        } catch (Exception e) {
+            LogError("Error drawing favorite indicator: " + e.Message);
+        }
     }
 
     //DrawMapNode
@@ -1718,7 +2341,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         float fraction = GetNormalizedWeight(cachedNode.Weight);
 
         float offsetX = Settings.MapTypes.ShowMapNames ? (Graphics.MeasureText(cachedNode.Name.ToUpper()).X / 2) + 30 : 50;
-        Vector2 position = new(nodeCurrentPosition.Center.X + offsetX, nodeCurrentPosition.Center.Y);
+        Vector2 position = new(nodeCurrentPosition.Center.X + offsetX + Settings.Graphics.MapNameOffsetX, nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY);
 
         DrawCenteredTextWithBackground($"{(int)(fraction*100)}%", position, GetWeightColorFromFraction(fraction), Settings.Graphics.BackgroundColor, true, 10, 3);
     }
@@ -1737,12 +2360,24 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         Color fontColor = Settings.MapTypes.UseColorsForMapNames ? cachedNode.MapType.NameColor : Settings.Graphics.FontColor;
         Color backgroundColor = Settings.MapTypes.UseColorsForMapNames ? cachedNode.MapType.BackgroundColor : Settings.Graphics.BackgroundColor;
-        
-        if (Settings.MapTypes.UseWeightColorsForMapNames) {
+
+        bool isSpecial = nodeCurrentPosition.Width > SpecialMapWidthThreshold;
+
+        if (isSpecial) {
+            // Special maps get their own customizable name color (never weight-based).
+            fontColor = Settings.Graphics.SpecialMapNameColor;
+        } else if (Settings.MapTypes.UseWeightColorsForMapNames && cachedNode.MapType.UseWeightColorForName) {
             fontColor = GetWeightColor(cachedNode.Weight);
         }
 
-        DrawCenteredTextWithBackground(cachedNode.Name.ToUpper(), nodeCurrentPosition.Center, fontColor, backgroundColor, true, 10, 3);
+        // Name text is always fully opaque regardless of the configured/weight color's alpha.
+        fontColor = Color.FromArgb(255, fontColor.R, fontColor.G, fontColor.B);
+
+        Vector2 namePosition = nodeCurrentPosition.Center + new Vector2(Settings.Graphics.MapNameOffsetX, Settings.Graphics.MapNameOffsetY);
+
+        // Special maps render their name 20% larger.
+        using (Graphics.SetTextScale(isSpecial ? 1.2f : 1.0f))
+            DrawCenteredTextWithBackground(cachedNode.Name.ToUpper(), namePosition, fontColor, backgroundColor, true, 10, 3);
     }
 
     private void DrawTowerMods(Node cachedNode, RectangleF nodeCurrentPosition)
@@ -2057,8 +2692,35 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
     #region Helper Functions
 
-    // Map tooltip can live under WorldMap child 13 or 14; checked in IsOnScreen.
-    private static readonly int[] TooltipChildIndices = { 13, 14 };
+    // Map tooltip is a WorldMap child identified by its popup texture; checked in IsOnScreen.
+    // Matches any AtlasScreen "*Popup*" texture (e.g. AtlasMapNodePopup / AtlasMapNodePopupSelected).
+    private const string TooltipTexturePrefix = "Art/Textures/Interface/2D/2DArt/UIImages/InGame/AtlasScreen/";
+    private static bool IsTooltipTexture(string textureName) =>
+        textureName != null && textureName.StartsWith(TooltipTexturePrefix) && textureName.Contains("Popup");
+
+    // Static atlas UI textures we never want to draw the overlay over (title bar, search box bg).
+    // Matched by exact texture name anywhere under the WorldMap element tree.
+    private static readonly HashSet<string> ExcludeTextureNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/WorldMap/WorldmapTitleBar.dds",
+        "Art/Textures/Interface/2D/2DArt/UIImages/Common/AtlasSearchBg.dds",
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/MapPinsWindow/MapPinLegendBG.dds",
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/MapLegend/LegendBg.dds",
+    };
+
+    // Recursively adds the client rect of any visible descendant whose texture is in
+    // ExcludeTextureNames. Depth-limited so a malformed/deep tree can't stall the frame.
+    private void AddExcludeRectsByTexture(ExileCore2.PoEMemory.Element element, int depth)
+    {
+        if (element == null || depth > 8 || !element.IsVisible)
+            return;
+
+        if (element.TextureName != null && ExcludeTextureNames.Contains(element.TextureName))
+            cachedExcludeRects.Add(element.GetClientRect());
+
+        foreach (var child in element.Children)
+            AddExcludeRectsByTexture(child, depth + 1);
+    }
 
     // Recomputes the on-screen rect and any visible map-tooltip rects once per render frame.
     // IsOnScreen then reads these cached values instead of re-reading panel/tooltip game memory
@@ -2078,32 +2740,95 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
             cachedScreenRect = new RectangleF(left, 0, right - left, size.Y);
 
-            // Don't render over the map tooltip. It can live under child 13 or 14;
-            // child 14 doesn't always exist, so each lookup is null-guarded.
-            cachedTooltipRects.Clear();
-            foreach (var tooltipIndex in TooltipChildIndices) {
-                var tooltip = UI.WorldMap.GetChildAtIndex(tooltipIndex);
+            // Don't render over the map tooltip. Its child index varies, so identify it
+            // by its popup texture (selected/unselected) instead of a fixed position.
+            cachedExcludeRects.Clear();
+            foreach (var tooltip in UI.WorldMap.Children) {
                 if (tooltip == null || !tooltip.IsVisible)
+                    continue;
+                if (!IsTooltipTexture(tooltip.TextureName))
                     continue;
 
                 RectangleF mapTooltip = tooltip.GetClientRect();
                 mapTooltip.Inflate(mapTooltip.Width * 0.1f, mapTooltip.Height * 0.1f);
-                cachedTooltipRects.Add(mapTooltip);
+                cachedExcludeRects.Add(mapTooltip);
             }
+
+            // Don't render over the atlas title bar / search box background.
+            AddExcludeRectsByTexture(UI.WorldMap, 0);
+
+            // Don't render over the fixed HUD elements (life/mana orbs, flask panel, skill bar).
+            AddExcludeRect(UI.GameUI?.LifeOrb);
+            AddExcludeRect(UI.GameUI?.ManaOrb);
+            AddExcludeRect(UI.GameUI?.FlaskPanel?.Parent);
+            AddExcludeRect(UI.SkillBar?.Parent);
         } catch (Exception e) {
             // Keep last good bounds on a failed memory read rather than blanking the overlay.
             LogError("Error updating screen bounds: " + e.Message);
         }
     }
 
+    // Adds a visible element's client rect to the no-draw set. Null/invisible elements are skipped.
+    private void AddExcludeRect(ExileCore2.PoEMemory.Element element)
+    {
+        if (element == null || !element.IsVisible)
+            return;
+        cachedExcludeRects.Add(element.GetClientRect());
+    }
+
     private bool IsOnScreen(Vector2 position)
     {
-        foreach (var tooltip in cachedTooltipRects)
+        foreach (var tooltip in cachedExcludeRects)
             if (tooltip.Contains(position))
                 return false;
 
         return cachedScreenRect.Contains(position);
     }
+
+    // A line is drawable only if both endpoints are on screen AND the segment doesn't
+    // pass through a tooltip rect (a line can clear both endpoint checks yet still cross
+    // the tooltip between them).
+    private bool IsLineVisible(Vector2 start, Vector2 end)
+    {
+        if (!IsOnScreen(start) || !IsOnScreen(end))
+            return false;
+
+        foreach (var tooltip in cachedExcludeRects)
+            if (SegmentIntersectsRect(start, end, tooltip))
+                return false;
+
+        return true;
+    }
+
+    // Segment vs axis-aligned rect. Endpoints are already known outside the rect (IsOnScreen
+    // rejects points inside a tooltip), so test the segment against the four edges.
+    private static bool SegmentIntersectsRect(Vector2 a, Vector2 b, RectangleF rect)
+    {
+        Vector2 tl = new(rect.Left, rect.Top);
+        Vector2 tr = new(rect.Right, rect.Top);
+        Vector2 br = new(rect.Right, rect.Bottom);
+        Vector2 bl = new(rect.Left, rect.Bottom);
+
+        return SegmentsIntersect(a, b, tl, tr) ||
+               SegmentsIntersect(a, b, tr, br) ||
+               SegmentsIntersect(a, b, br, bl) ||
+               SegmentsIntersect(a, b, bl, tl);
+    }
+
+    private static bool SegmentsIntersect(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4)
+    {
+        float d1 = Cross(p3, p4, p1);
+        float d2 = Cross(p3, p4, p2);
+        float d3 = Cross(p1, p2, p3);
+        float d4 = Cross(p1, p2, p4);
+
+        return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+               ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+    }
+
+    // Cross product of (b - a) x (c - a); sign tells which side of line ab point c is on.
+    private static float Cross(Vector2 a, Vector2 b, Vector2 c)
+        => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
 
     public float GetDistanceToNode(Node cachedNode)
     {
@@ -2147,6 +2872,193 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     
     #endregion
     #region Waypoint Panel
+    // MARK: Quick Edit
+    // Node currently being edited via the hover hotkey, and whether the popup is showing.
+    private Node quickEditNode;
+    private bool quickEditOpen;
+
+    private static void QuickColorEdit(string id, Color color, Action<Color> set) {
+        Vector4 v = new(color.R / 255f, color.G / 255f, color.B / 255f, color.A / 255f);
+        if (ImGui.ColorEdit4($"##{id}", ref v, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs))
+            set(Color.FromArgb((int)(v.W * 255), (int)(v.X * 255), (int)(v.Y * 255), (int)(v.Z * 255)));
+    }
+
+    /// MARK: DrawQuickEditPanel
+    /// Floating popup (opened by the Quick Edit hotkey while hovering a node) to edit that node's
+    /// map type and its content types inline. Edits the shared Map/Content instances, so changes
+    /// persist to settings and apply live.
+    private void DrawQuickEditPanel() {
+        try {
+            var map = quickEditNode?.MapType;
+            if (quickEditNode == null || map == null) { quickEditOpen = false; quickEditNode = null; return; }
+
+            Vector2 pos;
+            try { pos = quickEditNode.MapNode.Element.GetClientRect().Center + new Vector2(30, 0); }
+            catch { pos = screenCenter; }
+            ImGui.SetNextWindowPos(pos, ImGuiCond.Appearing);
+            ImGui.SetNextWindowSize(new Vector2(360, 0), ImGuiCond.Appearing);
+            ImGui.SetNextWindowBgAlpha(0.93f);
+
+            if (ImGui.Begin($"Quick Edit###quickedit", ref quickEditOpen, ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.AlwaysAutoResize)) {
+                ImGui.TextDisabled($"{quickEditNode.Name}  ({map.Name})");
+                ImGui.Separator();
+
+                bool highlight = map.Highlight;
+                if (ImGui.Checkbox("Highlight##qe", ref highlight)) map.Highlight = highlight;
+                ImGui.SameLine();
+                bool fav = map.Favorite;
+                if (ImGui.Checkbox("Favorite##qe", ref fav)) map.Favorite = fav;
+                ImGui.SameLine();
+                bool drawLine = map.DrawLine;
+                if (ImGui.Checkbox("Line##qe", ref drawLine)) map.DrawLine = drawLine;
+
+                float weight = map.Weight;
+                ImGui.SetNextItemWidth(220);
+                if (ImGui.SliderFloat("Weight##qe", ref weight, -25f, 50f, "%.1f")) map.Weight = weight;
+
+                QuickColorEdit("qe_node", map.NodeColor, c => map.NodeColor = c);
+                ImGui.SameLine(); ImGui.Text("Node");
+                ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
+                QuickColorEdit("qe_name", map.NameColor, c => map.NameColor = c);
+                ImGui.SameLine(); ImGui.Text("Name");
+                ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
+                QuickColorEdit("qe_bg", map.BackgroundColor, c => map.BackgroundColor = c);
+                ImGui.SameLine(); ImGui.Text("Text BG");
+
+                bool cbw = map.ColorNodesByWeight;
+                if (ImGui.Checkbox("Color node by weight##qe", ref cbw)) map.ColorNodesByWeight = cbw;
+                bool nbw = map.UseWeightColorForName;
+                if (ImGui.Checkbox("Color name by weight##qe", ref nbw)) map.UseWeightColorForName = nbw;
+
+                ImGui.Text("Icon"); ImGui.SameLine();
+                SettingsHelpers.IconPicker("qeicon", map.Icon, i => map.Icon = i);
+
+                if (quickEditNode.Content.Count > 0) {
+                    ImGui.Separator();
+                    ImGui.Text("Content");
+                    foreach (var (cname, content) in quickEditNode.Content) {
+                        ImGui.PushID($"qe_c_{cname}");
+                        QuickColorEdit("col", content.Color, c => content.Color = c);
+                        ImGui.SameLine();
+                        bool ring = content.Highlight;
+                        if (ImGui.Checkbox("Ring##c", ref ring)) content.Highlight = ring;
+                        ImGui.SameLine();
+                        bool cfav = content.Favorite;
+                        if (ImGui.Checkbox("Fav##c", ref cfav)) content.Favorite = cfav;
+                        ImGui.SameLine();
+                        float cw = content.Weight;
+                        ImGui.SetNextItemWidth(110);
+                        if (ImGui.SliderFloat("##cw", ref cw, -5f, 5f, "%.2f")) content.Weight = cw;
+                        ImGui.SameLine();
+                        ImGui.TextUnformatted(content.Name);
+                        ImGui.PopID();
+                    }
+                }
+
+                ImGui.Separator();
+                if (ImGui.Button("Close##qe")) quickEditOpen = false;
+            }
+            ImGui.End();
+
+            if (!quickEditOpen) quickEditNode = null;
+        } catch (Exception e) {
+            LogError("Error drawing quick edit panel: " + e.Message);
+            quickEditOpen = false;
+            quickEditNode = null;
+        }
+    }
+
+    // MARK: Node Debug
+    // Node currently shown in the debug popup, and whether it's open.
+    private Node debugNode;
+    private bool debugNodeOpen;
+
+    /// MARK: DrawNodeDebugPanel
+    /// Floating popup (opened by the Debug Node hotkey while hovering a node) showing the node's
+    /// debug text, element flags (as a binary string + per-flag), atlas-passive presence, biome id,
+    /// and the content present. All game-memory reads are guarded so a stale read can't crash the HUD.
+    private void DrawNodeDebugPanel() {
+        try {
+            if (debugNode == null) { debugNodeOpen = false; return; }
+            var node = debugNode;
+            var el = node.MapNode?.Element;
+
+            Vector2 pos;
+            try { pos = node.MapNode.Element.GetClientRect().Center + new Vector2(30, 0); }
+            catch { pos = screenCenter; }
+            ImGui.SetNextWindowPos(pos, ImGuiCond.Appearing);
+            ImGui.SetNextWindowSize(new Vector2(360, 0), ImGuiCond.Appearing);
+            ImGui.SetNextWindowBgAlpha(0.93f);
+
+            if (ImGui.Begin("Node Debug###nodedebug", ref debugNodeOpen, ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.AlwaysAutoResize)) {
+                ImGui.TextUnformatted(node.DebugText(false));
+
+                string parentAddr = $"{node.ParentAddress:X}";
+                if (ImGui.SmallButton($"Copy Parent Address##nd")) ImGui.SetClipboardText(parentAddr);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip($"Copy {parentAddr} to clipboard");
+
+                ImGui.Separator();
+
+                // Named element status getters, rendered true=1/false=0 in this order:
+                // CanTraverse, IsActive, IsCompleted, IsSaturated, IsScrollable, IsUnlocked,
+                // IsValid, IsVisible, IsVisibleLocal, IsVisited, HasShinyHighlight.
+                var status = new List<bool>();
+                void Add(Func<bool> get) { try { status.Add(get()); } catch { status.Add(false); } }
+                Add(() => el.CanTraverse);
+                Add(() => el.IsActive);
+                Add(() => el.IsCompleted);
+                Add(() => el.IsSaturated);
+                Add(() => el.IsScrollable);
+                Add(() => el.IsUnlocked);
+                Add(() => el.IsValid);
+                Add(() => el.IsVisible);
+                Add(() => el.IsVisibleLocal);
+                Add(() => el.IsVisited);
+                Add(() => el.HasShinyHighlight);
+                ImGui.Text($"Status: {string.Concat(status.Select(b => b ? "1" : "0"))}");
+
+                // Element.Flags is a separate List<bool> of the node's raw flag bits.
+                string bits = "";
+                try { bits = string.Concat(el.Flags.Select(b => b ? "1" : "0")); } catch { }
+                ImGui.Text($"Flags: {bits}");
+
+                bool passive = false;
+                try { passive = el?.AtlasEntry?.PassiveSkill != null; } catch { }
+                ImGui.Text($"AtlasEntry.PassiveSkill: {(passive ? "1" : "0")}");
+
+                string biomeId = "";
+                try { biomeId = node.MapNode.Element.Biome?.Id ?? ""; } catch { }
+                ImGui.Text($"Biome.Id: {biomeId}");
+
+                ImGui.Separator();
+                ImGui.Text("Content:");
+                if (node.Content.Count == 0)
+                    ImGui.TextDisabled("  (none)");
+                else
+                    foreach (var (_, c) in node.Content)
+                        ImGui.TextUnformatted($"  {c.Name}");
+
+                ImGui.Text("Biomes:");
+                var biomeNames = node.Biomes.Where(x => x.Value != null).Select(x => x.Value.Name).ToList();
+                if (biomeNames.Count == 0)
+                    ImGui.TextDisabled("  (none)");
+                else
+                    foreach (var b in biomeNames)
+                        ImGui.TextUnformatted($"  {b}");
+
+                ImGui.Separator();
+                if (ImGui.Button("Close##nd")) debugNodeOpen = false;
+            }
+            ImGui.End();
+
+            if (!debugNodeOpen) debugNode = null;
+        } catch (Exception e) {
+            LogError("Error drawing node debug panel: " + e.Message);
+            debugNodeOpen = false;
+            debugNode = null;
+        }
+    }
+
     private void DrawWaypointPanel() {
         Vector2 panelSize = new Vector2(UI.SettingsPanel.GetClientRect().Width, UI.SettingsPanel.GetClientRect().Height);
         Vector2 panelPosition = UI.SettingsPanel.GetClientRect().TopLeft;
@@ -2309,12 +3221,34 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             string sortBy = Settings.Waypoints.WaypointPanelSortBy;
             if (ImGui.BeginCombo("##sortByCombo", sortBy))
             {
-                if (ImGui.Selectable("Name", sortBy == "Name")) 
-                    sortBy = "Name";         
-                if (ImGui.Selectable("Weight", sortBy == "Weight")) 
-                    sortBy = "Weight";                    
-       
+                if (ImGui.Selectable("Name", sortBy == "Name"))
+                    sortBy = "Name";
+                if (ImGui.Selectable("Weight", sortBy == "Weight"))
+                    sortBy = "Weight";
+                if (ImGui.Selectable("Steps", sortBy == "Steps"))
+                    sortBy = "Steps";
+
                 Settings.Waypoints.WaypointPanelSortBy = sortBy;
+                ImGui.EndCombo();
+            }
+
+            ImGui.SameLine();
+            ImGui.Text("then ");
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(100);
+            string sortBy2 = Settings.Waypoints.WaypointPanelSortBy2;
+            if (ImGui.BeginCombo("##sortByCombo2", sortBy2))
+            {
+                if (ImGui.Selectable("None", sortBy2 == "None"))
+                    sortBy2 = "None";
+                if (ImGui.Selectable("Name", sortBy2 == "Name"))
+                    sortBy2 = "Name";
+                if (ImGui.Selectable("Weight", sortBy2 == "Weight"))
+                    sortBy2 = "Weight";
+                if (ImGui.Selectable("Steps", sortBy2 == "Steps"))
+                    sortBy2 = "Steps";
+
+                Settings.Waypoints.WaypointPanelSortBy2 = sortBy2;
                 ImGui.EndCombo();
             }
 
@@ -2327,15 +3261,20 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             int maxItems = Settings.Waypoints.WaypointPanelMaxItems;
             ImGui.SetNextItemWidth(100);
             if (ImGui.InputInt("##maxItems", ref maxItems))
-                Settings.Waypoints.WaypointPanelMaxItems = maxItems; 
+                Settings.Waypoints.WaypointPanelMaxItems = maxItems;
 
             ImGui.SameLine();
             ImGui.Spacing();
             ImGui.SameLine();
 
-            bool unlockedOnly = Settings.Waypoints.ShowUnlockedOnly;
-            if (ImGui.Checkbox("Show Unlocked Maps Only", ref unlockedOnly))
-                Settings.Waypoints.ShowUnlockedOnly = unlockedOnly;
+            ImGui.Text("Max Steps:");
+            ImGui.SameLine();
+            int maxSteps = Settings.Waypoints.WaypointPanelMaxSteps;
+            ImGui.SetNextItemWidth(100);
+            if (ImGui.InputInt("##maxSteps", ref maxSteps))
+                Settings.Waypoints.WaypointPanelMaxSteps = Math.Max(0, maxSteps);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Only show maps within this many steps of the explored region. 0 = unlimited.");
 
             ImGui.Separator();
 
@@ -2372,13 +3311,32 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 }
             }
 
-            tempCache = sortBy switch
+            // Step counts (steps from the explored region) for every reachable node, computed once.
+            // Used for both the Steps sort options and the Steps column display below.
+            var stepCounts = ComputeStepCounts();
+            int GetSteps(Node n) => stepCounts.TryGetValue(n.Coordinates, out var s) ? s : int.MaxValue;
+
+            // Limit to maps within N steps of the explored region (0 = unlimited).
+            int maxStepsFilter = Settings.Waypoints.WaypointPanelMaxSteps;
+            if (maxStepsFilter > 0)
+                tempCache = tempCache.Where(x => GetSteps(x.Value) <= maxStepsFilter).ToDictionary(x => x.Key, x => x.Value);
+
+            // Two-level sort: primary, then optional secondary tiebreak. Lets the user e.g. sort by
+            // Weight (desc) then Steps (asc) to surface the highest-weight map with the fewest steps.
+            var ordered = sortBy switch
             {
-                "Name" => tempCache.OrderBy(x => x.Value.Name).ToDictionary(x => x.Key, x => x.Value),
-                "Weight" => tempCache.OrderByDescending(x => x.Value.Weight).ToDictionary(x => x.Key, x => x.Value),
-                _ => tempCache.OrderByDescending(x => x.Value.Weight).ToDictionary(x => x.Key, x => x.Value),
+                "Name" => tempCache.OrderBy(x => x.Value.Name),
+                "Steps" => tempCache.OrderBy(x => GetSteps(x.Value)),
+                _ => tempCache.OrderByDescending(x => x.Value.Weight),
             };
-            tempCache = tempCache.Take(maxItems).ToDictionary(x => x.Key, x => x.Value);
+            ordered = sortBy2 switch
+            {
+                "Name" => ordered.ThenBy(x => x.Value.Name),
+                "Weight" => ordered.ThenByDescending(x => x.Value.Weight),
+                "Steps" => ordered.ThenBy(x => GetSteps(x.Value)),
+                _ => ordered,
+            };
+            tempCache = ordered.Take(maxItems).ToDictionary(x => x.Key, x => x.Value);
 
             var flags = ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable | ImGuiTableFlags.Hideable | ImGuiTableFlags.NoSavedSettings;
             ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(2, 2)); // Adjust the padding values as needed
@@ -2386,7 +3344,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             if (ImGui.BeginTable("atlas_list_table", 8, flags))//, new Vector2(-1, panelSize.Y/3)))
             {                                                            
                 ImGui.TableSetupColumn("Map Name", ImGuiTableColumnFlags.WidthFixed, 200);   
-                ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthFixed, 60);     
+                ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthFixed, 110);
                 ImGui.TableSetupColumn("Modifiers", ImGuiTableColumnFlags.WidthFixed, 100);
                 ImGui.TableSetupColumn("Steps", ImGuiTableColumnFlags.WidthFixed, 50);
                 ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 80);
@@ -2407,20 +3365,19 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         ImGui.TableNextColumn();
                         ImGui.TextUnformatted(node.Name);
 
-                        ImGui.SetWindowFontScale(0.7f);            
-
-                        // Content
+                        // Content — kept near full size; 0.7 was unreadable.
+                        ImGui.SetWindowFontScale(0.9f);
                         ImGui.TableNextColumn();
                         foreach(var (k,content) in node.Content) {
-                            _color = Settings.MapContent.ContentTypes[content.Name].Color;
+                            _color = content.Color;
                             _colorVector = new Vector4(_color.R / 255.0f, _color.G / 255.0f, _color.B / 255.0f, _color.A / 255.0f);
                             ImGui.PushStyleColor(ImGuiCol.Text, _colorVector);
                             ImGui.TextUnformatted(content.Name);
                             ImGui.PopStyleColor();
                         }
-                        
 
                         // Modifiers
+                        ImGui.SetWindowFontScale(0.7f);
                         ImGui.TableNextColumn();
                         foreach(var effect in node.Effects) {       
                             _color = Settings.MapMods.MapModTypes[effect.Key].Color;
@@ -2431,35 +3388,22 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         }
                         // reset font size
                         ImGui.SetWindowFontScale(1.0f);
-                        // Steps
+                        // Steps — graph distance from the explored region (see ComputeStepCounts),
+                        // shown for every node so it stays consistent with the Steps sort options.
                         ImGui.TableNextColumn();
-                        string stepsText = "-";
-
-                        // Instead of checking node.IsWaypoint, check if the node exists in the waypoints dictionary
-                        string waypointKey = node.Coordinates.ToString();
-                        if (Settings.Waypoints.Waypoints.TryGetValue(waypointKey, out Waypoint waypoint))
+                        int steps = GetSteps(node);
+                        if (steps >= 0 && steps != int.MaxValue)
                         {
-                            // We found a waypoint for this node
-                            if (waypoint.PathFromStart != null && waypoint.PathFromStart.Count > 0)
-                            {
-                                int steps = waypoint.PathFromStart.Count - 1;
-                                stepsText = steps.ToString();
-
-                                // Optionally color-code based on distance
-                                Color stepsColor = steps <= 3 ? Color.Green : (steps <= 7 ? Color.Yellow : Color.Red);
-                                Vector4 stepsColorVector = new Vector4(stepsColor.R / 255.0f, stepsColor.G / 255.0f, stepsColor.B / 255.0f, stepsColor.A / 255.0f);
-                                ImGui.PushStyleColor(ImGuiCol.Text, stepsColorVector);
-                                ImGui.TextUnformatted(stepsText);
-                                ImGui.PopStyleColor();
-                            }
-                            else
-                            {
-                                ImGui.TextUnformatted(stepsText);
-                            }
+                            // Color-code based on distance
+                            Color stepsColor = steps <= 3 ? Color.Green : (steps <= 7 ? Color.Yellow : Color.Red);
+                            Vector4 stepsColorVector = new Vector4(stepsColor.R / 255.0f, stepsColor.G / 255.0f, stepsColor.B / 255.0f, stepsColor.A / 255.0f);
+                            ImGui.PushStyleColor(ImGuiCol.Text, stepsColorVector);
+                            ImGui.TextUnformatted(steps.ToString());
+                            ImGui.PopStyleColor();
                         }
                         else
                         {
-                            ImGui.TextUnformatted(stepsText);
+                            ImGui.TextUnformatted("-");
                         }
                         // Weight
                         ImGui.TableNextColumn();
@@ -2556,6 +3500,51 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         Settings.Waypoints.Waypoints.Add(cachedNode.Coordinates.ToString(), newWaypoint);
         UpdateWaypointPaths();
+    }
+
+    /// MARK: SyncFavoriteWaypoints
+    /// Keeps auto-created waypoints in sync with favorite map types. Adds waypoints for favorite,
+    /// non-visited nodes and removes auto-created waypoints whose map is no longer a favorite (or
+    /// removes all auto-created waypoints when the feature is disabled). Manual waypoints
+    /// (AutoCreated == false) are never touched. Does not call UpdateWaypointPaths — the caller
+    /// (RefreshMapCache) does that once after this returns.
+    private void SyncFavoriteWaypoints() {
+        try {
+            // Snapshot favorite, non-visited nodes under the lock (background job mutates mapCache).
+            Dictionary<string, Node> favorites;
+            lock (mapCacheLock)
+                favorites = mapCache.Values
+                    .Where(x => x.IsFavorited && !x.IsVisited)
+                    .GroupBy(x => x.Coordinates.ToString())
+                    .ToDictionary(g => g.Key, g => g.First());
+
+            if (!Settings.Waypoints.AutoWaypointFavorites) {
+                // Feature off: clean up everything we auto-created.
+                foreach (var key in Settings.Waypoints.Waypoints.Where(x => x.Value.AutoCreated).Select(x => x.Key).ToList())
+                    Settings.Waypoints.Waypoints.Remove(key);
+                return;
+            }
+
+            // Add waypoints for favorites that don't have one yet.
+            foreach (var (key, node) in favorites) {
+                if (Settings.Waypoints.Waypoints.ContainsKey(key))
+                    continue;
+
+                Waypoint newWaypoint = node.ToWaypoint();
+                newWaypoint.Icon = MapIconsIndex.LootFilterLargeWhiteUpsideDownHouse;
+                newWaypoint.Color = Settings.Graphics.PathLineColor;
+                newWaypoint.AutoCreated = true;
+                Settings.Waypoints.Waypoints.Add(key, newWaypoint);
+            }
+
+            // Remove auto-created waypoints whose map is no longer a favorite.
+            foreach (var key in Settings.Waypoints.Waypoints
+                .Where(x => x.Value.AutoCreated && !favorites.ContainsKey(x.Key))
+                .Select(x => x.Key).ToList())
+                Settings.Waypoints.Waypoints.Remove(key);
+        } catch (Exception e) {
+            LogError("Error syncing favorite waypoints: " + e.Message);
+        }
     }
 
     private void RemoveWaypoint(Node cachedNode) {
