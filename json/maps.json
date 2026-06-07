@@ -43,7 +43,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 10
   },
   "MapAugury": {
     "Name": "Augury",
@@ -65,7 +65,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": -10
+    "Weight": 5
   },
   "MapAzmerianRanges": {
     "Name": "Azmerian Ranges",
@@ -87,7 +87,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 5
   },
   "MapBackwash": {
     "Name": "Backwash",
@@ -109,7 +109,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 25
+    "Weight": 15
   },
   "Bastille": {
     "Name": "Bastille",
@@ -131,7 +131,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 15
   },
   "Bloodbowl": {
     "Name": "Bloodbowl",
@@ -194,7 +194,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 25
+    "Weight": 10
   },
   "MapBluff": {
     "Name": "Bluff",
@@ -215,7 +215,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 15
   },
   "MapBurialBog": {
     "Name": "Burial Bog",
@@ -302,7 +302,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": -10
+    "Weight": 20
   },
   "MapCreek": {
     "Name": "Creek",
@@ -368,7 +368,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 0
   },
   "MapDecay": {
     "Name": "Decay",
@@ -390,7 +390,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": -10
+    "Weight": 5
   },
   "MapDerelictMansion": {
     "Name": "Derelict Mansion",
@@ -433,7 +433,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 25
+    "Weight": 15
   },
   "MapHideoutFelled_Claimable": {
     "Name": "Felled Hideout",
@@ -476,7 +476,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 0
   },
   "MapFortress": {
     "Name": "Fortress",
@@ -520,7 +520,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 15
   },
   "GothicCity": {
     "Name": "Gothic City",
@@ -557,7 +557,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 15
   },
   "MapHeadland": {
     "Name": "Headland",
@@ -579,7 +579,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 15
   },
   "MapHiddenGrotto": {
     "Name": "Hidden Grotto",
@@ -624,7 +624,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 15
   },
   "Inferno": {
     "Name": "Inferno",
@@ -732,7 +732,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 50
+    "Weight": 10
   },
   "MapMesa": {
     "Name": "Mesa",
@@ -753,7 +753,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 10
   },
   "MapMineshaft": {
     "Name": "Mineshaft",
@@ -776,7 +776,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 0
   },
   "MapMire": {
     "Name": "Mire",
@@ -798,7 +798,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": -10
+    "Weight": 5
   },
   "MapNecropolis": {
     "Name": "Necropolis",
@@ -820,7 +820,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": -10
+    "Weight": 15
   },
   "MapOasis": {
     "Name": "Oasis",
@@ -842,7 +842,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 20
   },
   "Outlands": {
     "Name": "Outlands",
@@ -886,7 +886,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 20
   },
   "MapRavine": {
     "Name": "Ravine",
@@ -930,7 +930,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 5
   },
   "Rockpools": {
     "Name": "Rockpools",
@@ -952,7 +952,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 15
   },
   "MapRustbowl": {
     "Name": "Rustbowl",
@@ -974,7 +974,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 25
   },
   "MapSandspit": {
     "Name": "Sandspit",
@@ -996,7 +996,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 25
   },
   "MapSavanna": {
     "Name": "Savannah",
@@ -1040,7 +1040,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": -10
+    "Weight": 0
   },
   "MapHideoutShrine_Claimable": {
     "Name": "Shrine Hideout",
@@ -1083,7 +1083,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 10
   },
   "MapSlick": {
     "Name": "Slick",
@@ -1105,7 +1105,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 25
+    "Weight": 15
   },
   "MapSpiderWoods": {
     "Name": "Spider Woods",
@@ -1127,7 +1127,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 25
+    "Weight": 20
   },
   "MapSteamingSprings": {
     "Name": "Steaming Springs",
@@ -1149,7 +1149,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 25
+    "Weight": 15
   },
   "MapSteppe": {
     "Name": "Steppe",
@@ -1193,7 +1193,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 10
+    "Weight": 0
   },
   "MapSump": {
     "Name": "Sump",
@@ -1215,7 +1215,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 10
   },
   "MapSunTemple": {
     "Name": "Sun Temple",
@@ -1237,7 +1237,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": -10
+    "Weight": -25
   },
   "MapTrenches": {
     "Name": "Trenches",
@@ -1361,7 +1361,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 5
   },
   "MapVaalFactory": {
     "Name": "Vaal Factory",
@@ -1492,7 +1492,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 20
   },
   "MapUniqueCastaway": {
     "Name": "Castaway",
@@ -1763,7 +1763,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 0
   },
   "MapVaalOutskirts": {
     "Name": "Vaal Outskirts",
@@ -1917,7 +1917,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 20
   },
   "MapEpitaph": {
     "Name": "Epitaph",
@@ -1939,7 +1939,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 25
   },
   "MapRupture": {
     "Name": "Rupture",
@@ -1961,7 +1961,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 15
   },
   "MapOvergrown": {
     "Name": "Overgrown",
@@ -1983,7 +1983,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 20
   },
   "MapCaldera": {
     "Name": "Caldera",
@@ -2005,7 +2005,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 20
   },
   "MapChasm": {
     "Name": "Chasm",
@@ -2049,7 +2049,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 10
   },
   "MapSevenWaters": {
     "Name": "Confluence",
@@ -2071,7 +2071,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 20
   },
   "MapCavernCity": {
     "Name": "Sacred Reservoir",
@@ -2115,7 +2115,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 20
   },
   "MapStronghold": {
     "Name": "Stronghold",
@@ -2137,7 +2137,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 10
   },
   "MapCrag": {
     "Name": "Crag",
@@ -2225,7 +2225,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": -5
   },
   "MapBoulevard": {
     "Name": "Boulevard",
@@ -2269,7 +2269,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": -5
   },
   "MapSinkhole": {
     "Name": "Sinkhole",
@@ -2291,7 +2291,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": -5
   },
   "MapFlotsam": {
     "Name": "Flotsam",
@@ -2313,7 +2313,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 10
   },
   "MapUniqueMerchant04_PirateShip": {
     "Name": "The Voyage",
@@ -2445,7 +2445,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 5
   },
   "MapCanyon": {
     "Name": "Canyon",
@@ -2467,7 +2467,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 15
   },
   "MapRazedFields": {
     "Name": "Razed Fields",
@@ -2489,7 +2489,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 0
   },
   "MapRugosa": {
     "Name": "Rugosa",
@@ -2511,7 +2511,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": -5
   },
   "MapRiverhold": {
     "Name": "Riverhold",
@@ -2533,7 +2533,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 15
   },
   "MapExcavation": {
     "Name": "Digsite",
@@ -2555,7 +2555,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": 5
   },
   "MapIceCave": {
     "Name": "Ice Cave",
@@ -2577,7 +2577,7 @@
     "Count": 0,
     "LockedCount": 0,
     "FogCount": 0,
-    "Weight": 1
+    "Weight": -5
   },
   "MapVaalVault": {
     "Name": "Sealed Vault",

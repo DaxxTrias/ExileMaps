@@ -50,6 +50,12 @@ public class Node
     public Dictionary<string, Effect> Effects { get; set; } = [];
     [JsonIgnore]
     public bool DrawTowers { get; set; }
+    // True when the map grants an atlas passive point (AtlasEntry.PassiveSkill present).
+    [JsonIgnore]
+    public bool GivesAtlasPoint { get; set; }
+    // True when the map has atlas quest content (PassiveSkill.Id contains "AtlasQuest").
+    [JsonIgnore]
+    public bool HasAtlasQuest { get; set; }
 
     public long Address { get; set; }
     public long ParentAddress { get; set; }
@@ -116,15 +122,17 @@ public class Node
         return sb.ToString();
     }
 
-    public string DebugText() {
-        
+    public string DebugText(bool includeContentBiomes = true) {
+
         StringBuilder sb = new();
-        sb.AppendLine($"Id: {Id}"); 
+        sb.AppendLine($"Id: {Id}");
         sb.AppendLine($"ParentAddress: {ParentAddress:X}");
         sb.AppendLine($"Weight: {Weight}");
         sb.AppendLine($"Coordinates: {Coordinates}");
-        sb.AppendLine($"Biomes: {string.Join(", ", Biomes.Where(x => x.Value != null).Select(x => x.Value.Name))}");
-        sb.AppendLine($"Content: {string.Join(", ", Content.Select(x => x.Value.Name))}");
+        if (includeContentBiomes) {
+            sb.AppendLine($"Biomes: {string.Join(", ", Biomes.Where(x => x.Value != null).Select(x => x.Value.Name))}");
+            sb.AppendLine($"Content: {string.Join(", ", Content.Select(x => x.Value.Name))}");
+        }
 
         var towers = Effects.SelectMany(x => x.Value.Sources).Distinct().Count();
         if (towers > 0) {
